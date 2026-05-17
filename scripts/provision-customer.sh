@@ -36,7 +36,7 @@ while (( $# > 0 )); do
   esac
 done
 
-for v in SLUG TIER DOMAIN EMAIL NAME; do
+for v in SLUG TIER EMAIL NAME; do
   [[ -z "${!v}" ]] && die "Missing --${v,,} (run with --help)"
 done
 

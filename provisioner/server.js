@@ -245,7 +245,17 @@ const server = http.createServer(async (req, res) => {
       if (!body.slug || typeof body.slug !== "string" || !SLUG_RE.test(body.slug)) {
         return json(res, 400, { error: "invalid slug" });
       }
-      const job = enqueue("provision", body.slug);
+      const extra = [];
+      const str = (v) => (typeof v === "string" ? v : "");
+      // Whitelist of forwarded flags. All values are passed as separate argv
+      // items, so shell interpolation is not a concern.
+      if (str(body.tier)) extra.push("--tier", str(body.tier));
+      if (str(body.name)) extra.push("--name", str(body.name));
+      if (str(body.email)) extra.push("--email", str(body.email));
+      if (str(body.domain)) extra.push("--domain", str(body.domain));
+      if (str(body.brandColour)) extra.push("--brand-colour", str(body.brandColour));
+      if (body.resume) extra.push("--resume");
+      const job = enqueue("provision", body.slug, extra);
       return json(res, 202, { jobId: job.jobId, status: job.status });
     } catch (e) {
       return json(res, 400, { error: "bad json" });
