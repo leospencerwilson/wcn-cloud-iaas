@@ -54,8 +54,11 @@ ok "Tunnel has ${conns} connection(s)"
 
 # 7. (Tier-dependent) Supabase Studio responding
 if [[ "$tier" != "site" ]]; then
-  if ! ssh ops@"$ip" 'curl -fs http://localhost:3000/api/health' >/dev/null; then
-    die "Supabase Studio not responding on $ip"
+  # Studio's root returns 307 (redirect to /project/default) when healthy.
+  # Accept any 2xx/3xx.
+  code=$(ssh ops@"$ip" 'curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/')
+  if [[ ! "$code" =~ ^[23] ]]; then
+    die "Supabase Studio not responding on $ip (HTTP $code)"
   fi
   ok "Supabase"
 fi
