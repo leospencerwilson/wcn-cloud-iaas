@@ -1,0 +1,122 @@
+/* ─────────────────────────────────────────────────────────────────
+   WCN Cloud — Coolify white-label overlay
+   ─────────────────────────────────────────────────────────────────
+   Loaded via Caddy at /assets/wcn-overlay.css and injected into
+   Coolify pages by a small <link rel="stylesheet"> snippet that the
+   firstboot script adds to /data/coolify/source/resources/views/...
+   (Coolify's Blade layout).
+
+   Goal: hide everything the customer shouldn't see, recolour to our
+   brand, replace product naming. Non-destructive — pure CSS overlay.
+   The ops user can disable this by removing the <link> and Coolify's
+   stock UI is back. */
+
+:root {
+  --wcn-primary:        var(--wcn-brand-primary, #3b82f6);
+  --wcn-primary-fg:     #ffffff;
+  --wcn-secondary:      var(--wcn-brand-secondary, #1f2937);
+  --wcn-bg:             #f9fafb;
+  --wcn-fg:             #111827;
+  --wcn-muted:          #6b7280;
+  --wcn-border:         #e5e7eb;
+}
+
+/* ── re-brand the primary nav ───────────────────────────────────── */
+.coolify-logo,
+img[alt*="Coolify" i] {
+  display: none !important;
+}
+
+.coolify-logo + *::before,
+.sidebar header::before {
+  content: "";
+  display: inline-block;
+  width: 140px;
+  height: 32px;
+  background: url('/assets/wcn-overlay-logo.svg') no-repeat left center;
+  background-size: contain;
+  vertical-align: middle;
+}
+
+/* ── recolour primary buttons + accents ─────────────────────────── */
+.btn-primary,
+button[class*="primary" i]:not([disabled]) {
+  background-color: var(--wcn-primary) !important;
+  border-color:     var(--wcn-primary) !important;
+  color:            var(--wcn-primary-fg) !important;
+}
+a[class*="primary" i],
+.text-primary,
+.text-coollabs {
+  color: var(--wcn-primary) !important;
+}
+
+/* ── hide things customers shouldn't see ────────────────────────── */
+/* Server-level admin */
+a[href*="/server"],
+a[href*="/team/admin"],
+a[href*="/destination"],
+a[href*="/source"],
+a[href*="/storages"],
+a[href*="/notifications/team"],
+nav a:has(span:matches("Server", "Destinations", "Sources", "Storages", "Servers")) {
+  display: none !important;
+}
+
+/* "Coolify Cloud" upsell banner */
+.coolify-cloud-banner,
+[data-coolify-cloud],
+.banner-upgrade {
+  display: none !important;
+}
+
+/* About / version footer (gives away it's Coolify) */
+.app-version,
+.coolify-version,
+footer .text-xs:has(:matches("Coolify", "v4", "v3")) {
+  display: none !important;
+}
+
+/* Help links pointing to coolify.io */
+a[href*="coolify.io"],
+a[href*="docs.coollabs"],
+a[href*="github.com/coollabsio"] {
+  display: none !important;
+}
+
+/* ── replace product mentions in the title bar ──────────────────── */
+title:has(:contains("Coolify")) {
+  /* CSS can't change page title, but we add an MutationObserver in JS
+     loaded with this stylesheet — see /assets/wcn-overlay.js */
+}
+
+/* ── login screen tweaks ────────────────────────────────────────── */
+body.login {
+  background:
+    linear-gradient(135deg, var(--wcn-primary) 0%, var(--wcn-secondary) 100%) !important;
+}
+
+.login-form .logo {
+  background: url('/assets/wcn-overlay-logo-mono.svg') no-repeat center !important;
+  background-size: contain !important;
+  height: 60px;
+}
+
+/* ── tighten spacing where Coolify is generous, breathe where dense */
+.sidebar { width: 220px !important; }
+.sidebar .nav-item { padding: 0.5rem 1rem !important; }
+.main-content { padding: 1.5rem 2rem !important; }
+
+/* ── responsive: collapse sidebar on small screens ──────────────── */
+@media (max-width: 768px) {
+  .sidebar { transform: translateX(-100%); }
+  .sidebar.open { transform: translateX(0); }
+}
+
+/* ── scrollbar styling (subtle WCN identity) ────────────────────── */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb {
+  background: var(--wcn-border);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--wcn-muted); }

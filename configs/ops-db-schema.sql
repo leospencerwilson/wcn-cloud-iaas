@@ -1,0 +1,104 @@
+-- WCN Cloud ops database schema.
+-- Postgres ≥ 15. Owned by user wcn_ops.
+--
+-- Apply: psql "$OPS_DB_URL" < ops-db-schema.sql
+-- Idempotent.
+
+BEGIN;
+
+-- ───────────────────────── customers ─────────────────────────
+CREATE TABLE IF NOT EXISTS customers (
+    slug              text         PRIMARY KEY
+                                   CHECK (slug ~ '^[a-z][a-z0-9-]{2,19}$'),
+    name              text         NOT NULL,
+    tier              text         NOT NULL
+                                   CHECK (tier IN ('site', 'site-db', 'pro')),
+    contact_email     text         NOT NULL,
+    brand_primary     text         DEFAULT '#3b82f6',
+    brand_secondary   text         DEFAULT '#1f2937',
+    status            text         NOT NULL DEFAULT 'provisioning'
+                                   CHECK (status IN ('provisioning', 'active', 'suspended', 'deleted')),
+    created_at        timestamptz  NOT NULL DEFAULT now(),
+    activated_at      timestamptz,
+    deleted_at        timestamptz,
+    notes             text,
+    last_job_id       text         -- latest provisioner job id, set by the console
+);
+
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS last_job_id text;
+
+CREATE INDEX IF NOT EXISTS customers_status_idx ON customers (status);
+
+-- ───────────────────────── vms ─────────────────────────
+CREATE TABLE IF NOT EXISTS vms (
+    vmid                       int          PRIMARY KEY
+                                            CHECK (vmid BETWEEN 200 AND 399),
+    customer_slug              text         NOT NULL REFERENCES customers(slug),
+    ip                         inet         UNIQUE,
+    tunnel_id                  text         UNIQUE,
+    coolify_access_app_id      text,
+    supabase_access_app_id     text,
+    coolify_signing_token      text,        -- per-VM secret, used by the console to sign API calls
+    status                     text         NOT NULL DEFAULT 'reserving'
+                                            CHECK (status IN ('reserving', 'active', 'suspended', 'destroyed')),
+    proxmox_node               text         DEFAULT 'dreadnaught',
+    created_at                 timestamptz  NOT NULL DEFAULT now(),
+    activated_at               timestamptz,
+    last_updated_at            timestamptz,
+    destroyed_at               timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS vms_customer_idx ON vms (customer_slug);
+CREATE INDEX IF NOT EXISTS vms_status_idx   ON vms (status);
+
+-- ───────────────────────── domains ─────────────────────────
+CREATE TABLE IF NOT EXISTS domains (
+    hostname                  text         PRIMARY KEY,
+    customer_slug             text         NOT NULL REFERENCES customers(slug),
+    cf_custom_hostname_id     text         NOT NULL,
+    target_app                text,        -- which Coolify app this domain points at
+    status                    text         NOT NULL DEFAULT 'pending'
+                                           CHECK (status IN ('pending', 'active', 'failed', 'deleted')),
+    created_at                timestamptz  NOT NULL DEFAULT now(),
+    activated_at              timestamptz,
+    deleted_at                timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS domains_customer_idx ON domains (customer_slug);
+
+-- ───────────────────────── audit_log ─────────────────────────
+CREATE TABLE IF NOT EXISTS audit_log (
+    id          bigserial    PRIMARY KEY,
+    ts          timestamptz  NOT NULL DEFAULT now(),
+    actor       text         NOT NULL,    -- email or system actor
+    action      text         NOT NULL,    -- e.g. "provision-start", "domain-add"
+    slug        text,                     -- optional customer slug
+    details     text                      -- free-form
+);
+
+CREATE INDEX IF NOT EXISTS audit_log_slug_idx ON audit_log (slug, ts DESC);
+CREATE INDEX IF NOT EXISTS audit_log_ts_idx   ON audit_log (ts DESC);
+
+-- ───────────────────────── views ─────────────────────────
+CREATE OR REPLACE VIEW v_active_customers AS
+  SELECT c.slug, c.name, c.tier, c.contact_email,
+         v.vmid, v.ip, v.tunnel_id,
+         (SELECT count(*) FROM domains d WHERE d.customer_slug = c.slug AND d.status = 'active') AS custom_domain_count,
+         c.created_at, v.last_updated_at
+  FROM customers c
+  LEFT JOIN vms v ON v.customer_slug = c.slug AND v.status = 'active'
+  WHERE c.status = 'active';
+
+-- ───────────────────────── B2 lifecycle (run once via rclone) ─────────────────────────
+-- This is a comment, not SQL — but worth keeping near the schema for ops reference.
+--
+-- Configure on the bucket itself via the Backblaze web UI (or `rclone`):
+--
+--   rclone backend lifecycle b2:wcn-cloud-backups \
+--     --rules '[{"daysFromHidingToDeleting": 365, "daysFromUploadingToHiding": 30,
+--                "fileNamePrefix": ""}]'
+--
+-- We rely on B2 lifecycle (not application-level pruning) so we can't accidentally
+-- delete things the database "doesn't know about".
+
+COMMIT;

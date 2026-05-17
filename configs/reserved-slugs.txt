@@ -1,0 +1,137 @@
+# Reserved customer slugs — never allocate to a customer.
+# One slug per line. Comments start with #.
+# Used by scripts/common.sh::validate_slug_available.
+#
+# Edit this when you add a new WCN internal service that occupies
+# <name>.western-communication.com.
+
+# ── RFC / system ────────────────────────────────────────────
+www
+mail
+ftp
+ns
+ns1
+ns2
+ns3
+ns4
+dns
+mx
+mx1
+mx2
+smtp
+pop
+pop3
+imap
+imaps
+smtps
+webmail
+autodiscover
+autoconfig
+
+# ── common web ──────────────────────────────────────────────
+api
+app
+apps
+web
+blog
+shop
+store
+forum
+wiki
+docs
+help
+support
+contact
+home
+landing
+
+# ── admin / ops ─────────────────────────────────────────────
+admin
+administrator
+root
+console
+dashboard
+panel
+cpanel
+portal
+manage
+manager
+control
+status
+monitor
+monitoring
+metrics
+grafana
+kibana
+prometheus
+alerts
+logs
+log
+
+# ── auth ────────────────────────────────────────────────────
+auth
+login
+logout
+signin
+signup
+register
+sso
+account
+accounts
+profile
+my
+me
+
+# ── infra ───────────────────────────────────────────────────
+cdn
+static
+assets
+img
+images
+media
+files
+download
+downloads
+upload
+uploads
+
+# ── env stages ──────────────────────────────────────────────
+test
+tests
+demo
+beta
+alpha
+dev
+develop
+development
+staging
+stage
+preview
+prod
+production
+sandbox
+
+# ── networking ──────────────────────────────────────────────
+vpn
+ssh
+sftp
+remote
+mta
+sip
+voip
+voice
+video
+phone
+
+# ── WCN-specific (add real records here) ───────────────────
+super
+dreadnaught
+ilo
+proxmox
+coolify
+supabase
+mikrotik
+console
+auth
+invite
+invites

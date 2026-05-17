@@ -1,0 +1,24 @@
+# Already its own repo
+console/
+
+# Router backups (sensitive)
+*.rsc
+*.backup
+
+# Secrets / env
+.env
+.env.*
+*.key
+*.pem
+**/customer.env
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.claude/
+.idea/
+.vscode/
+
+# Logs / scratch
+*.log
+/tmp/

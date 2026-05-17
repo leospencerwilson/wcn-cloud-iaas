@@ -1,0 +1,21 @@
+[Unit]
+Description=WCN Cloud provisioner trigger
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/wcn-cloud/provisioner.env
+ExecStart=/usr/bin/node /opt/wcn-cloud/provisioner/server.js
+Restart=on-failure
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+# Hardening
+NoNewPrivileges=false
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
