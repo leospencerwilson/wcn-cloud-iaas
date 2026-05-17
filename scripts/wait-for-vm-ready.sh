@@ -33,8 +33,9 @@ fi
 attempt=0
 while (( $(date +%s) < deadline )); do
   attempt=$((attempt + 1))
-  if out=$(ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
-       ops@"${ip}" 'cloud-init status --wait' 2>&1); then
+  out=$(ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
+       ops@"${ip}" 'cloud-init status --wait || true; cloud-init status' 2>&1 || true)
+  if grep -qE 'status: *done' <<<"$out"; then
     ok "Cloud-init complete on ${ip}"
     return 0 2>/dev/null || exit 0
   fi
