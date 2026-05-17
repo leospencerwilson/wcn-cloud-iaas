@@ -13,6 +13,13 @@ else
   C_RED= C_GRN= C_YEL= C_BLU= C_DIM= C_RST=
 fi
 
+# ── ssh/scp wrappers ───────────────────────────────────────────────────
+# Trusted private subnet (10.10.x.x). Accept new host keys on first contact,
+# but still reject if a known key changes.
+SSH_OPTS=( -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 )
+pssh() { ssh "${SSH_OPTS[@]}" "$@"; }
+pscp() { scp "${SSH_OPTS[@]}" "$@"; }
+
 log()   { printf '%s[%s]%s %s\n' "$C_DIM" "$(date -u +%H:%M:%S)" "$C_RST" "$*" >&2; }
 info()  { printf '%s[INFO]%s  %s\n' "$C_BLU" "$C_RST" "$*" >&2; }
 ok()    { printf '%s[ OK ]%s  %s\n' "$C_GRN" "$C_RST" "$*" >&2; }

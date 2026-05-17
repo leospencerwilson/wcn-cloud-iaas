@@ -119,14 +119,14 @@ if pve_api GET "/nodes/dreadnaught/qemu/${VMID}/status/current" \
   info "[5/9] VM ${VMID} already exists"
 else
   info "[5/9] Cloning template 9001 → VMID ${VMID} (this takes ~3 min)..."
-  ssh root@"$PROXMOX_HOST" "qm clone 9001 ${VMID} --name wcn-cloud-${SLUG} --full" \
+  pssh root@"$PROXMOX_HOST" "qm clone 9001 ${VMID} --name wcn-cloud-${SLUG} --full" \
     || die "Clone failed"
   ok "[5/9] Cloned"
 fi
 
 # ── 6. configure VM ───────────────────────────────────────────────────
 info "[6/9] Configuring VM (cloud-init)..."
-ssh root@"$PROXMOX_HOST" bash -s <<EOF
+pssh root@"$PROXMOX_HOST" bash -s <<EOF
 qm set ${VMID} \
   --ipconfig0 ip=${IP}/24,gw=10.10.31.1 \
   --nameserver "1.1.1.1 1.0.0.1" \
@@ -142,7 +142,7 @@ if [[ "$status" == "running" ]]; then
   info "[7/9] VM already running"
 else
   info "[7/9] Starting VM..."
-  ssh root@"$PROXMOX_HOST" "qm start ${VMID}"
+  pssh root@"$PROXMOX_HOST" "qm start ${VMID}"
 fi
 "$HERE/wait-for-vm-ready.sh" "$VMID" "$IP"
 ok "[7/9] VM ready"
@@ -156,10 +156,10 @@ info "[8/9] Pushing customer.env + tunnel cred, running firstboot..."
   --ip "$IP" \
   > "/tmp/customer-${SLUG}.env"
 
-scp -q "/tmp/customer-${SLUG}.env" "ops@${IP}:/tmp/customer.env"
-[[ -f "$CRED_PATH" ]] && scp -q "$CRED_PATH" "ops@${IP}:/tmp/cf-cred.json"
+pscp -q "/tmp/customer-${SLUG}.env" "ops@${IP}:/tmp/customer.env"
+[[ -f "$CRED_PATH" ]] && pscp -q "$CRED_PATH" "ops@${IP}:/tmp/cf-cred.json"
 
-ssh ops@"$IP" 'sudo install -m 600 -o root -g root /tmp/customer.env /etc/wcn-cloud/customer.env && \
+pssh ops@"$IP" 'sudo install -m 600 -o root -g root /tmp/customer.env /etc/wcn-cloud/customer.env && \
                   if [[ -f /tmp/cf-cred.json ]]; then \
                     sudo install -m 600 -o root -g root /tmp/cf-cred.json /etc/wcn-cloud/cf-cred.json; \
                   fi && \
