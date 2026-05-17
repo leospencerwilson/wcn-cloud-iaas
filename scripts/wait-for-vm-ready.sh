@@ -17,7 +17,7 @@ info "Waiting for VM ${vmid} at ${ip} (timeout: ${timeout}s)"
 
 # Phase 1: Proxmox QEMU guest agent reports ready.
 while (( $(date +%s) < deadline )); do
-  response=$(pve_api GET "/nodes/dreadnaught/qemu/${vmid}/agent/ping" || true)
+  response=$(pve_api POST "/nodes/dreadnaught/qemu/${vmid}/agent/ping" || true)
   if jq -e '.data' >/dev/null 2>&1 <<<"$response"; then
     ok "Guest agent responding"
     break
