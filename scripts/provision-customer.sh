@@ -18,7 +18,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 
 require_env CF_API_TOKEN CF_ACCOUNT_ID CF_ZONE_ID \
             PROXMOX_API_TOKEN PROXMOX_HOST OPS_DB_URL
-require_cmd curl jq psql ssh scp qm
+require_cmd curl jq psql ssh scp
 
 # ── parse args ─────────────────────────────────────────────────────────
 SLUG=""; TIER=""; DOMAIN=""; EMAIL=""; NAME=""; BRAND_COLOUR="#3b82f6"; RESUME=false
