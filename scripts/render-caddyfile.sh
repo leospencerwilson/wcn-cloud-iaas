@@ -21,7 +21,7 @@ source "$env_file"
 
 require_var() {
   local v="$1"
-  [[ -z "${!v:-}" ]] && die "Missing $v in $env_file"
+  [[ -n "${!v:-}" ]] || die "Missing $v in $env_file"
 }
 for v in SLUG CONSOLE_HOSTNAME TIER; do require_var "$v"; done
 
