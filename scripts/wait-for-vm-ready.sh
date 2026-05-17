@@ -30,12 +30,17 @@ if (( $(date +%s) >= deadline )); then
 fi
 
 # Phase 2: SSH reachable, returns expected output.
+attempt=0
 while (( $(date +%s) < deadline )); do
-  if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
-       -o UserKnownHostsFile=/tmp/wcn-cloud-known-hosts-${vmid} \
-       ops@"${ip}" 'cloud-init status --wait' &>/dev/null; then
+  attempt=$((attempt + 1))
+  if out=$(ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
+       ops@"${ip}" 'cloud-init status --wait' 2>&1); then
     ok "Cloud-init complete on ${ip}"
     return 0 2>/dev/null || exit 0
+  fi
+  # Surface the last error every 6 attempts (~30s) so we can diagnose.
+  if (( attempt % 6 == 1 )); then
+    warn "SSH attempt ${attempt} failed: ${out}"
   fi
   sleep 5
 done
