@@ -65,7 +65,7 @@ It'll prompt you to type the slug to confirm. Type `acme`.
 
 ## 5. Verify
 
-- Customer VM is reachable: `curl -fI https://acme.app.western-communication.com/healthz`
+- Customer VM is reachable: `curl -fI https://acme.western-communication.com/healthz`
 - Their app starts cleanly: `ssh ops@<ip> 'docker ps'` shows the apps as `Up`
 - A test query against Postgres returns expected data:
   ```bash

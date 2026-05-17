@@ -17,7 +17,7 @@ Make these now and commit them. Changing later is painful.
 | Product name | **WCN Cloud** | ✅ |
 | Sales site (existing) | `westerncommunication.co.uk` (out of scope — already live) | ✅ |
 | Console URL | `console.western-communication.com` | ✅ |
-| Default customer subdomain | `*.app.western-communication.com` | ✅ |
+| Default customer subdomain | `*.western-communication.com` | ✅ |
 | Status page URL | `status.western-communication.com` | ✅ |
 | Customer-facing support email | `cloud-support@western-communication.com` | ✅ |
 | Brand primary colour | (extract from sales site — see § 0.5) | ⬜ |

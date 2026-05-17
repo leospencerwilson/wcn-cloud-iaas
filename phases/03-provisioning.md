@@ -15,9 +15,9 @@ After `provision-customer.sh` returns successfully:
 - A new Proxmox VM exists (next free VMID in 200–399, full clone of 9001)
 - It boots with the correct `customer.env` already in place
 - A Cloudflare Tunnel exists for it, with credentials baked into the VM
-- DNS records exist on `*.app.western-communication.com` for the customer
-- Coolify is accessible via Cloudflare Access at `https://<slug>.app.western-communication.com/coolify`
-- Supabase Studio is accessible at `https://<slug>.app.western-communication.com/supabase`
+- DNS records exist on `*.western-communication.com` for the customer
+- Coolify is accessible via Cloudflare Access at `https://<slug>.western-communication.com/coolify`
+- Supabase Studio is accessible at `https://<slug>.western-communication.com/supabase`
 - The customer is in the ops DB with status `active`
 - The customer admin (`admin@acme.com`) has a Cloudflare Access policy granting them in
 - An audit log row exists noting "provisioned by leo.wilson@... at <ts>"
@@ -52,7 +52,7 @@ allocate
   ├─ vmid    = SELECT next free VMID 200..399 from Proxmox + ops DB
   ├─ ip      = SELECT next free IP from 10.10.31.10..200 from ops DB
   └─ hostnames
-       ├─ console hostname = <slug>.app.western-communication.com
+       ├─ console hostname = <slug>.western-communication.com
        ├─ tunnel name      = wcn-cloud-<slug>
        └─ db backup prefix = b2:wcn-cloud-backups/<slug>/
 
@@ -77,8 +77,8 @@ push-customer-env (SSH)
        (firstboot.sh reads customer.env, brings up Caddy + cloudflared + Coolify properly)
 
 create-access-policies (Cloudflare API)
-  ├─ POST /accounts/{acct}/access/apps  (one app per <slug>.app.* path /coolify)
-  ├─ POST /accounts/{acct}/access/apps  (one app per <slug>.app.* path /supabase)
+  ├─ POST /accounts/{acct}/access/apps  (one app per <slug>.* path /coolify)
+  ├─ POST /accounts/{acct}/access/apps  (one app per <slug>.* path /supabase)
   └─ each with policy: include emails [admin email] and "ends with @westerncommunication.co.uk"
 
 write-ops-db
@@ -88,8 +88,8 @@ write-ops-db
   └─ UPDATE customers SET status='active' once health-check passes
 
 health-check
-  ├─ curl https://<slug>.app.western-communication.com/coolify/api/v1/health → 200 (after Access)
-  ├─ curl https://<slug>.app.western-communication.com/supabase/api/health → 200
+  ├─ curl https://<slug>.western-communication.com/coolify/api/v1/health → 200 (after Access)
+  ├─ curl https://<slug>.western-communication.com/supabase/api/health → 200
   └─ test in ops DB: SELECT count(*) FROM customers WHERE slug=$slug AND status='active' = 1
 
 print-summary
@@ -213,7 +213,7 @@ Expected output (~10 min for tier=pro, with full clone):
 [1/10] Validating arguments... ok
 [2/10] Allocating VMID 201, IP 10.10.31.10... ok
 [3/10] Creating Cloudflare Tunnel wcn-cloud-acme... ok (id: abc123...)
-[4/10] Creating DNS record acme.app.western-communication.com... ok
+[4/10] Creating DNS record acme.western-communication.com... ok
 [5/10] Cloning Proxmox VM 9001 → 201 (this takes ~3 min)... ok
 [6/10] Configuring VM (cloud-init: IP, SSH key)... ok
 [7/10] Booting VM... ok (ready in 47s)
@@ -223,8 +223,8 @@ Expected output (~10 min for tier=pro, with full clone):
 
 ✅ Customer 'acme' provisioned successfully.
 
-   Console:   https://acme.app.western-communication.com/coolify
-   Supabase:  https://acme.app.western-communication.com/supabase
+   Console:   https://acme.western-communication.com/coolify
+   Supabase:  https://acme.western-communication.com/supabase
    Admin:     admin@acme.com (must sign in via SSO)
 
 Next steps:
@@ -251,7 +251,7 @@ Then deprovision:
 
 Confirm:
 - VM 201 is gone (`qm list | grep 201` → empty)
-- DNS record gone (`dig test-001.app.western-communication.com` → NXDOMAIN)
+- DNS record gone (`dig test-001.western-communication.com` → NXDOMAIN)
 - CF tunnel gone (CF dashboard → Zero Trust → Networks → Tunnels)
 - ops DB row marked deleted (`psql … -c "select slug, status from customers where slug='test-001'"`)
 - B2 still has the final dump (`rclone ls b2:wcn-cloud-backups/test-001/final/`)
@@ -261,7 +261,7 @@ Confirm:
 Phase 3 is done when **all four** are true:
 
 1. `provision-customer.sh test-001` succeeds in ≤ 30 min total
-2. The provisioned customer's `https://test-001.app.western-communication.com/coolify` is reachable (after Access SSO)
+2. The provisioned customer's `https://test-001.western-communication.com/coolify` is reachable (after Access SSO)
 3. `deprovision-customer.sh test-001` cleanly removes everything except the final B2 dump
 4. The ops DB shows the customer with `status='deleted'`, audit log has a row for both create + delete
 

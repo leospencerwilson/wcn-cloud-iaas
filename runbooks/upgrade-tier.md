@@ -35,7 +35,7 @@ The customer's app moves from a shared VM to a dedicated one. ~30 min downtime.
 3. Set up DB if they didn't have one before — fresh Supabase instance on the new VM.
 
 4. Cutover:
-   - Update DNS for `<slug>.app.western-communication.com` (CNAME → new tunnel)
+   - Update DNS for `<slug>.western-communication.com` (CNAME → new tunnel)
    - Reissue Access apps against the new VM's tunnel
    - Update ops DB
 

@@ -41,7 +41,7 @@ To get app.acme.com pointing to WCN Cloud, please add this DNS record:
 
   Type:    CNAME
   Name:    app  (or "app.acme.com" depending on your DNS provider)
-  Target:  acme.app.western-communication.com
+  Target:  acme.western-communication.com
   TTL:     auto / 300 (5 min)
 
 Once added, our system will detect it within ~5 minutes and issue

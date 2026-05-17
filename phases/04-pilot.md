@@ -67,7 +67,7 @@ Verify (per phase 3 § 3.8 acceptance) the VM is healthy.
 
 This is the part that's manual for v1 (will be self-service in phase 5+). We do it on their behalf, on a screenshare.
 
-1. SSO into `https://<slug>.app.western-communication.com/coolify` as the operator (you)
+1. SSO into `https://<slug>.western-communication.com/coolify` as the operator (you)
 2. **Project → New** — `<customer-name>-prod`
 3. **Resource → New → Public repository** — paste their git URL
 4. Set environment variables (you have these from the migration prep)
@@ -80,7 +80,7 @@ If they need a Postgres separate from the Supabase one, also:
 
 ## 4.5 Add their custom domain
 
-Once the app is healthy on `<slug>.app.western-communication.com/<their-app>`, add their real domain.
+Once the app is healthy on `<slug>.western-communication.com/<their-app>`, add their real domain.
 
 ```bash
 ./scripts/add-custom-domain.sh \

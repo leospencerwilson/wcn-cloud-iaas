@@ -43,9 +43,9 @@ chmod 600 "$cred_path"
 
 ok "Tunnel ${tunnel_id} created, credentials at ${cred_path}"
 
-# Configure ingress: route the customer's <slug>.app.* host to localhost:80 on the VM (Caddy).
+# Configure ingress: route the customer's <slug>.* host to localhost:80 on the VM (Caddy).
 config_body=$(jq -nc \
-  --arg hostname "${slug}.app.western-communication.com" \
+  --arg hostname "${slug}.western-communication.com" \
   '{config: {ingress: [
     {hostname: $hostname, service: "http://localhost:80"},
     {service: "http_status:404"}

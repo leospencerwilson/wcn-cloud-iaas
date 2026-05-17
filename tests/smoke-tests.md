@@ -90,7 +90,7 @@ slug="smoke-$(date +%s)"
 qm_count=$(ssh root@192.168.50.50 "qm list" | awk '$2 ~ /'"$slug"'/' | wc -l)
 [[ "$qm_count" -eq 0 ]] || { echo "VM not destroyed"; exit 1; }
 
-dns=$(dig +short "${slug}.app.western-communication.com")
+dns=$(dig +short "${slug}.western-communication.com")
 [[ -z "$dns" ]] || { echo "DNS not removed"; exit 1; }
 
 status=$(psql "$OPS_DB_URL" -At -c "SELECT status FROM customers WHERE slug='$slug'")
@@ -107,7 +107,7 @@ slug="<pilot-slug>"
 ./scripts/customer-health-check.sh "$slug"
 
 # Their console hostname returns 302 (Access redirect — expected)
-status=$(curl -s -o /dev/null -w "%{http_code}" "https://${slug}.app.western-communication.com/coolify")
+status=$(curl -s -o /dev/null -w "%{http_code}" "https://${slug}.western-communication.com/coolify")
 [[ "$status" =~ ^(200|302|401)$ ]] || { echo "Unexpected status: $status"; exit 1; }
 
 # Their custom domain (if they have one) is up

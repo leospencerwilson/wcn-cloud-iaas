@@ -112,7 +112,7 @@ Week-by-week breakdown (one mid-level engineer):
 - Deploy to staging hostname (e.g. `console-staging.western-communication.com`)
 - Internal eval: have 2 ops users try it for a day
 - Fix issues, repeat
-- Cut over the pilot customer: they switch from `<slug>.app.western-communication.com/coolify` to `console.western-communication.com`
+- Cut over the pilot customer: they switch from `<slug>.western-communication.com/coolify` to `console.western-communication.com`
 
 ## 5.5 Key files to create
 
@@ -161,7 +161,7 @@ For each existing customer (after we've validated the new console internally):
 1. Email them: "We're moving to a new console. Here's what's different. Old UI works for 30 more days, new one is at console.western-communication.com."
 2. Add their email to the new console's Access policy
 3. Update their welcome materials (PDFs / loom videos) to point to the new URL
-4. After 30 days: disable Cloudflare Access policies on `<slug>.app.western-communication.com/coolify` (they get 401 if they try the old URL)
+4. After 30 days: disable Cloudflare Access policies on `<slug>.western-communication.com/coolify` (they get 401 if they try the old URL)
 5. Coolify on each VM stays running — just no longer end-user-accessible. We still use it directly for ops.
 
 ## 5.7 Acceptance
@@ -178,7 +178,7 @@ Phase 5 is done when **all five** are true:
 
 If the new console fails badly post-cutover:
 
-1. Re-enable the Access policy on `<slug>.app.western-communication.com/coolify` for the customer in question
+1. Re-enable the Access policy on `<slug>.western-communication.com/coolify` for the customer in question
 2. Email them: "We've reverted you to the previous console while we fix X. No data lost."
 3. Postmortem.
 

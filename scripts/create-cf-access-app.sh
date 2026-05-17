@@ -19,7 +19,7 @@ extra_emails=("$@")
 validate_slug "$slug"
 validate_email "$admin_email"
 
-domain="${slug}.app.western-communication.com"
+domain="${slug}.western-communication.com"
 app_name="wcn-cloud-${slug}-${path//\//}"
 
 info "Creating Access app '${app_name}' for ${domain}${path}"

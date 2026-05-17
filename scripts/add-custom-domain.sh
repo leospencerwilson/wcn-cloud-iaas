@@ -71,7 +71,7 @@ cat <<MSG
 
      Name:    ${DOMAIN}
      Type:    CNAME
-     Target:  ${SLUG}.app.western-communication.com
+     Target:  ${SLUG}.western-communication.com
      TTL:     auto / 300
 
    Once added, our system will detect it within ~5 minutes and

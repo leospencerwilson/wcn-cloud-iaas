@@ -69,7 +69,7 @@ You'll be prompted to type the slug. Don't `--force` unless you're 100% sure.
 ## 5. Verify (5 min)
 
 - [ ] `qm list | grep <vmid>` → empty
-- [ ] `dig <slug>.app.western-communication.com` → NXDOMAIN
+- [ ] `dig <slug>.western-communication.com` → NXDOMAIN
 - [ ] `psql … -c "select status from customers where slug='<slug>'"` → `deleted`
 - [ ] `rclone ls b2:wcn-cloud-backups/<slug>/final/` → ≥ 1 file
 
