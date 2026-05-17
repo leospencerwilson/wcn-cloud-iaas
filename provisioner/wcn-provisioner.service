@@ -12,10 +12,12 @@ RestartSec=3
 StandardOutput=journal
 StandardError=journal
 
-# Hardening
+# Hardening — keep minimal. Service runs as root and needs:
+#   - /root/.ssh (key + known_hosts for ssh to Proxmox and customer VMs)
+#   - /etc/wcn-cloud (env files)
+#   - /var/log/wcn-cloud (job logs)
+#   - /tmp (customer.env, cf-cred.json staging)
 NoNewPrivileges=false
-ProtectSystem=full
-ProtectHome=true
 
 [Install]
 WantedBy=multi-user.target
