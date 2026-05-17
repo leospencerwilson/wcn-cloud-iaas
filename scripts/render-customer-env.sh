@@ -26,9 +26,10 @@ while (( $# > 0 )); do
   esac
 done
 
-for v in SLUG TIER NAME EMAIL DOMAIN TUNNEL_ID IP; do
+for v in SLUG TIER NAME EMAIL TUNNEL_ID IP; do
   [[ -z "${!v}" ]] && die "Missing --${v,,}"
 done
+# Domain is optional — custom domains are added later via add-custom-domain.sh.
 
 case "$TIER" in
   site)    SUPABASE_PRESET="none";  COOLIFY_MEM="2g";;
