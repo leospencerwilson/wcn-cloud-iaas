@@ -11,7 +11,7 @@ require_cmd curl jq psql ssh
 slug="${1:?Usage: $0 <slug>}"
 validate_slug "$slug"
 
-read -r ip tier <<<"$(ops_db -c "SELECT v.ip, c.tier FROM vms v JOIN customers c ON c.slug=v.customer_slug WHERE v.customer_slug='$slug'" | tr '|' ' ')"
+IFS='|' read -r ip tier <<<"$(ops_db -c "SELECT host(v.ip), c.tier FROM vms v JOIN customers c ON c.slug=v.customer_slug WHERE v.customer_slug='$slug'")"
 [[ -n "$ip" ]] || die "No VM record for slug '$slug'"
 
 info "Health-checking $slug at $ip (tier=$tier)"
