@@ -12,7 +12,7 @@ require_cmd psql
 slug="${1:?Usage: $0 <slug>}"
 validate_slug "$slug"
 
-used=$(ops_db -c "SELECT ip FROM vms WHERE ip LIKE '10.10.31.%' ORDER BY ip")
+used=$(ops_db -c "SELECT host(ip) FROM vms WHERE ip << inet '10.10.31.0/24' ORDER BY ip")
 
 for last in $(seq 10 200); do
   candidate="10.10.31.${last}"
