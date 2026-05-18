@@ -164,6 +164,13 @@ sed -i "s/^127.0.1.1.*/127.0.1.1\twcn-cloud-${SLUG}/" /etc/hosts || true
 # which then breaks reload (caddy.service runs as user caddy).
 systemctl reload caddy
 
+# Supabase stack: enable + start the systemd unit installed at template
+# build. /etc/wcn-cloud/supabase.env was pushed by the provisioner before
+# wcn-firstboot.service was triggered, so this start finds the env file.
+if [[ -f /etc/wcn-cloud/supabase.env ]]; then
+  systemctl enable --now wcn-supabase.service
+fi
+
 # Cloudflared: wire up tunnel using the credentials JSON.
 if [[ -f "$CRED" && -n "${CLOUDFLARED_TUNNEL_ID:-}" ]]; then
   mkdir -p /etc/cloudflared
@@ -194,6 +201,30 @@ touch "$MARKER"
 echo "Firstboot complete for $SLUG"
 FIRSTBOOT
 chmod 755 /opt/wcn-cloud/bin/firstboot.sh
+
+# wcn-supabase.service: starts the per-customer Supabase docker compose
+# stack from /opt/supabase-stack using /etc/wcn-cloud/supabase.env as the
+# env file. firstboot.sh enables+starts it once supabase.env is in place;
+# on subsequent reboots systemd starts it automatically.
+cat >/etc/systemd/system/wcn-supabase.service <<UNIT
+[Unit]
+Description=WCN Cloud Supabase stack
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+ConditionPathExists=/etc/wcn-cloud/supabase.env
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/supabase-stack
+ExecStart=/usr/bin/docker compose --env-file /etc/wcn-cloud/supabase.env up -d
+ExecStop=/usr/bin/docker compose --env-file /etc/wcn-cloud/supabase.env down
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target
+UNIT
 
 cat >/etc/systemd/system/wcn-firstboot.service <<EOF
 [Unit]
