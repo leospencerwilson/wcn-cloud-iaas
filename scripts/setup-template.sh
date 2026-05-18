@@ -171,6 +171,11 @@ if [[ -f /etc/wcn-cloud/supabase.env ]]; then
   systemctl enable --now wcn-supabase.service
 fi
 
+# Coolify-proxy (Traefik): Coolify itself only starts the proxy on first
+# login/deploy, but customer VMs need it up immediately so Caddy's
+# catch-all (→ 127.0.0.1:8081) has a live upstream from boot 1.
+systemctl enable --now wcn-coolify-proxy.service
+
 # Cloudflared: wire up tunnel using the credentials JSON.
 if [[ -f "$CRED" && -n "${CLOUDFLARED_TUNNEL_ID:-}" ]]; then
   mkdir -p /etc/cloudflared
@@ -221,6 +226,27 @@ WorkingDirectory=/opt/supabase-stack
 ExecStart=/usr/bin/docker compose --env-file /etc/wcn-cloud/supabase.env up -d
 ExecStop=/usr/bin/docker compose --env-file /etc/wcn-cloud/supabase.env down
 TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+# wcn-coolify-proxy.service: starts Coolify's Traefik proxy from
+# /data/coolify/proxy/docker-compose.yml. Symmetric with wcn-supabase.service.
+cat >/etc/systemd/system/wcn-coolify-proxy.service <<UNIT
+[Unit]
+Description=WCN Cloud Coolify reverse-proxy (Traefik)
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/data/coolify/proxy
+ExecStart=/usr/bin/docker compose up -d
+ExecStop=/usr/bin/docker compose down
+TimeoutStartSec=180
 
 [Install]
 WantedBy=multi-user.target
