@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS vms (
     coolify_access_app_id      text,
     supabase_access_app_id     text,
     coolify_signing_token      text,        -- per-VM secret, used by the console to sign API calls
+    db_password                text,        -- per-customer Postgres password (also in /etc/wcn-cloud/supabase.env on the VM); retained so backup/restore tooling can find it
     status                     text         NOT NULL DEFAULT 'reserving'
                                             CHECK (status IN ('reserving', 'active', 'suspended', 'destroyed')),
     proxmox_node               text         DEFAULT 'dreadnaught',
