@@ -26,10 +26,10 @@ done
 validate_slug "$SLUG"
 
 # Look up the customer.
-read -r vmid ip tunnel_id status <<<"$(ops_db -c "
-  SELECT v.vmid, v.ip, v.tunnel_id, c.status
+IFS='|' read -r vmid ip tunnel_id status <<<"$(ops_db -c "
+  SELECT v.vmid, host(v.ip), v.tunnel_id, c.status
   FROM customers c LEFT JOIN vms v ON v.customer_slug=c.slug
-  WHERE c.slug='${SLUG}'" | tr '|' ' ')"
+  WHERE c.slug='${SLUG}'")"
 
 [[ -z "$vmid" ]] && die "No record for slug '$SLUG' (already removed?)"
 
