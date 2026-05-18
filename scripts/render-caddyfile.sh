@@ -105,11 +105,18 @@ cat <<CADDY
     }
 
     # —— /healthz (used by external monitoring) ——
-    respond /healthz "ok" 200
+    # Wrapped in `handle` so it shares routing group with the catch-all below;
+    # bare `respond /healthz` is auto-sorted AFTER `handle {}`, making it
+    # unreachable.
+    handle /healthz {
+        respond "ok" 200
+    }
 
-    # —— Catch-all: app workloads (Coolify-managed) get routed by their Host header to Traefik ——
+    # —— Catch-all: app workloads (Coolify-managed) get routed by their Host
+    # header to Traefik. Port 8081 matches the proxy compose binding
+    # (127.0.0.1:8081:80 — see /data/coolify/proxy/docker-compose.yml).
     handle {
-        reverse_proxy http://127.0.0.1:8080
+        reverse_proxy http://127.0.0.1:8081
     }
 
     log {
