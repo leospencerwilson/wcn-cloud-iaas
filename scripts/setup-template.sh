@@ -121,11 +121,14 @@ chown -R root:root /etc/wcn-cloud
 chmod 755 /etc/wcn-cloud
 chmod 700 /etc/wcn-cloud   # contains secrets after firstboot
 
-# Install render-caddyfile.sh into the VM (so Caddy can be re-rendered later).
-cp /tmp/render-caddyfile.sh /opt/wcn-cloud/bin/render-caddyfile.sh 2>/dev/null || \
-  curl -fsSL https://raw.githubusercontent.com/wcn/iaas-bootstrap/main/render-caddyfile.sh \
-    -o /opt/wcn-cloud/bin/render-caddyfile.sh
-chmod 755 /opt/wcn-cloud/bin/render-caddyfile.sh
+# Install render-caddyfile.sh + its sourced helper common.sh into the VM
+# (so Caddy can be re-rendered later — by firstboot.sh and add-custom-domain.sh).
+for f in render-caddyfile.sh common.sh; do
+  cp /tmp/$f /opt/wcn-cloud/bin/$f 2>/dev/null || \
+    curl -fsSL https://raw.githubusercontent.com/wcn/iaas-bootstrap/main/$f \
+      -o /opt/wcn-cloud/bin/$f
+  chmod 755 /opt/wcn-cloud/bin/$f
+done
 
 # ── 10. branding ──────────────────────────────────────────────────────
 log "Unpacking branding"
@@ -155,7 +158,10 @@ sed -i "s/^127.0.1.1.*/127.0.1.1\twcn-cloud-${SLUG}/" /etc/hosts || true
 
 # Render Caddyfile from customer.env.
 /opt/wcn-cloud/bin/render-caddyfile.sh "$ENV" > /etc/caddy/Caddyfile
-caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+# `systemctl reload caddy` validates the new config internally.
+# Don't run an explicit `caddy validate` here: it would execute as root and
+# open the access-log writer, creating /var/log/caddy/access.log root-owned,
+# which then breaks reload (caddy.service runs as user caddy).
 systemctl reload caddy
 
 # Cloudflared: wire up tunnel using the credentials JSON.
@@ -176,7 +182,10 @@ YAML
 fi
 
 # Coolify: ensure it's started and admin email is set.
-docker exec $(docker ps -q -f name=coolify) bash -c "
+# Anchor the name filter — `name=coolify` matched coolify, coolify-db,
+# coolify-redis, coolify-realtime, coolify-sentinel, returning multiple IDs
+# which `docker exec` would parse as <container> <command>, failing.
+docker exec $(docker ps -q -f 'name=^coolify$') bash -c "
   echo 'Setting Coolify admin email...'
 " 2>/dev/null || true
 
