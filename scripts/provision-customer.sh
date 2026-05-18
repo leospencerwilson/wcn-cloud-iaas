@@ -118,8 +118,8 @@ if pve_api GET "/nodes/dreadnaught/qemu/${VMID}/status/current" \
    | jq -e '.data.status' >/dev/null 2>&1; then
   info "[5/9] VM ${VMID} already exists"
 else
-  info "[5/9] Cloning template 9001 → VMID ${VMID} (this takes ~3 min)..."
-  pssh root@"$PROXMOX_HOST" "qm clone 9001 ${VMID} --name wcn-cloud-${SLUG} --full" \
+  info "[5/9] Cloning template ${TEMPLATE_VMID:-9002} → VMID ${VMID} (this takes ~3 min)..."
+  pssh root@"$PROXMOX_HOST" "qm clone ${TEMPLATE_VMID:-9002} ${VMID} --name wcn-cloud-${SLUG} --full" \
     || die "Clone failed"
   ok "[5/9] Cloned"
 fi
