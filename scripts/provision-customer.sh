@@ -156,16 +156,30 @@ info "[8/9] Pushing customer.env + tunnel cred, running firstboot..."
   --ip "$IP" \
   > "/tmp/customer-${SLUG}.env"
 
+# Generate the per-VM Supabase env (secrets+JWTs); also writes db_password
+# back to ops_db.vms.db_password as a side effect.
+"$HERE/render-customer-env.sh" --target supabase \
+  --slug "$SLUG" --tier "$TIER" --name "$NAME" \
+  --email "$EMAIL" --domain "$DOMAIN" \
+  --tunnel-id "$TUNNEL_ID" --brand-colour "$BRAND_COLOUR" \
+  --ip "$IP" \
+  > "/tmp/supabase-${SLUG}.env"
+
 pscp -q "/tmp/customer-${SLUG}.env" "ops@${IP}:/tmp/customer.env"
+pscp -q "/tmp/supabase-${SLUG}.env" "ops@${IP}:/tmp/supabase.env"
 [[ -f "$CRED_PATH" ]] && pscp -q "$CRED_PATH" "ops@${IP}:/tmp/cf-cred.json"
 
 pssh ops@"$IP" 'sudo install -m 600 -o root -g root /tmp/customer.env /etc/wcn-cloud/customer.env && \
+                  sudo install -m 600 -o root -g root /tmp/supabase.env /etc/wcn-cloud/supabase.env && \
                   if [[ -f /tmp/cf-cred.json ]]; then \
                     sudo install -m 600 -o root -g root /tmp/cf-cred.json /etc/wcn-cloud/cf-cred.json; \
                   fi && \
                   sudo systemctl start wcn-firstboot.service && \
                   sudo systemctl status wcn-firstboot.service --no-pager'
 ok "[8/9] Firstboot complete"
+
+# scrub local tmp files (they contain secrets)
+rm -f "/tmp/customer-${SLUG}.env" "/tmp/supabase-${SLUG}.env"
 
 # ── 9. health check + finalise ────────────────────────────────────────
 # Auth is enforced by the WCN console (Caddy forward_auth → /api/verify),
