@@ -43,17 +43,22 @@ chmod 600 "$cred_path"
 
 ok "Tunnel ${tunnel_id} created, credentials at ${cred_path}"
 
-# Configure ingress. The subdomain-per-service architecture (03dc5ae) puts
-# coolify.SLUG.*, studio.SLUG.*, and api.SLUG.* on their own hostnames, so
-# we accept both the bare SLUG.* apex (Traefik for customer apps) AND a
-# wildcard for any *.SLUG.* sub-subdomain. Caddy on the VM dispatches by
-# Host header.
+# Configure ingress. The subdomain-per-service architecture puts admin-,
+# db-, and api- single-level subdomains alongside the apex SLUG.* so each
+# is covered by Universal SSL's *.western-communication.com wildcard.
+# Caddy on the VM dispatches by Host header. 4 explicit hostnames (no
+# wildcard) because cloudflared hostname-matchers are per-label and
+# `*-suffix` patterns aren't supported.
 config_body=$(jq -nc \
-  --arg apex_host "${slug}.western-communication.com" \
-  --arg wild_host "*.${slug}.western-communication.com" \
+  --arg apex_host  "${slug}.western-communication.com" \
+  --arg admin_host "admin-${slug}.western-communication.com" \
+  --arg db_host    "db-${slug}.western-communication.com" \
+  --arg api_host   "api-${slug}.western-communication.com" \
   '{config: {ingress: [
-    {hostname: $apex_host, service: "http://localhost:80"},
-    {hostname: $wild_host, service: "http://localhost:80"},
+    {hostname: $apex_host,  service: "http://localhost:80"},
+    {hostname: $admin_host, service: "http://localhost:80"},
+    {hostname: $db_host,    service: "http://localhost:80"},
+    {hostname: $api_host,   service: "http://localhost:80"},
     {service: "http_status:404"}
   ]}}')
 

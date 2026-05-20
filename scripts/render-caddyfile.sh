@@ -30,9 +30,14 @@ for v in SLUG CONSOLE_HOSTNAME TIER; do require_var "$v"; done
 # Coolify (Laravel), Studio (Next.js) and Kong all generate root-anchored
 # URLs/redirects/assets that don't honour X-Forwarded-Prefix. Cookies stay
 # scoped to .western-communication.com so console SSO covers all four.
-COOLIFY_HOSTNAME="coolify.${CONSOLE_HOSTNAME}"
-STUDIO_HOSTNAME="studio.${CONSOLE_HOSTNAME}"
-API_HOSTNAME="api.${CONSOLE_HOSTNAME}"
+#
+# Single-level dashed subdomains (Universal SSL *.western-communication.com
+# covers one label deep; multi-level subdomains would need per-customer ACM
+# certs). Role-named (admin/db/api) rather than tech-named so the URLs don't
+# lie if the underlying service is ever swapped.
+ADMIN_HOSTNAME="admin-${SLUG}.western-communication.com"   # Coolify dashboard
+DB_HOSTNAME="db-${SLUG}.western-communication.com"         # Supabase Studio
+API_HOSTNAME="api-${SLUG}.western-communication.com"       # Supabase Kong (PostgREST/auth/storage)
 
 # Auth: every protected host runs `forward_auth` against the WCN console's
 # /api/verify endpoint. The console issues a signed cookie on successful
@@ -52,7 +57,7 @@ cat <<CADDY
 
 # Reusable forward_auth snippet: validates the wcn-fa cookie via the console.
 # X-Wcn-Slug is sent explicitly so /api/verify doesn't have to parse the slug
-# out of X-Forwarded-Host (which may now be coolify.SLUG.*, studio.SLUG.*, …).
+# out of X-Forwarded-Host (which may be admin-SLUG.*, db-SLUG.*, api-SLUG.*, …).
 (wcn_auth) {
     forward_auth ${WCN_VERIFY} {
         uri /api/verify
@@ -90,8 +95,8 @@ http://${CONSOLE_HOSTNAME} {
     }
 }
 
-# ── Coolify dashboard ─────────────────────────────────────────────────
-http://${COOLIFY_HOSTNAME} {
+# ── Coolify dashboard (admin-) ────────────────────────────────────────
+http://${ADMIN_HOSTNAME} {
     encode gzip
     import wcn_auth
     reverse_proxy http://127.0.0.1:8000
@@ -105,8 +110,8 @@ CADDY
 if [[ "$SUPABASE_PRESET" != "none" ]]; then
 cat <<CADDY
 
-# ── Supabase Studio ───────────────────────────────────────────────────
-http://${STUDIO_HOSTNAME} {
+# ── Supabase Studio (db-) ─────────────────────────────────────────────
+http://${DB_HOSTNAME} {
     encode gzip
     import wcn_auth
     reverse_proxy http://127.0.0.1:3000
@@ -116,7 +121,7 @@ http://${STUDIO_HOSTNAME} {
     }
 }
 
-# ── Supabase Kong (API) ───────────────────────────────────────────────
+# ── Supabase Kong (api-) ──────────────────────────────────────────────
 # No wcn_auth — Kong validates the anon/service-role JWT itself.
 http://${API_HOSTNAME} {
     encode gzip
@@ -130,8 +135,8 @@ CADDY
 else
 cat <<CADDY
 
-# studio.* and api.* disabled — tier=${TIER} has no DB.
-http://${STUDIO_HOSTNAME} {
+# db-${SLUG}.* and api-${SLUG}.* disabled — tier=${TIER} has no DB.
+http://${DB_HOSTNAME} {
     respond "Not available on your plan" 404
 }
 http://${API_HOSTNAME} {

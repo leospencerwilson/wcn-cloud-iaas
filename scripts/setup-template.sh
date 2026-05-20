@@ -187,7 +187,11 @@ no-autoupdate: true
 ingress:
   - hostname: ${CONSOLE_HOSTNAME}
     service: http://localhost:80
-  - hostname: "*.${CONSOLE_HOSTNAME}"
+  - hostname: admin-${SLUG}.western-communication.com
+    service: http://localhost:80
+  - hostname: db-${SLUG}.western-communication.com
+    service: http://localhost:80
+  - hostname: api-${SLUG}.western-communication.com
     service: http://localhost:80
   - service: http_status:404
 YAML

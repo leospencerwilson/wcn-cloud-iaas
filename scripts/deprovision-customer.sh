@@ -84,9 +84,9 @@ info "[3/5] Removing DNS record + tunnel..."
 # records are no-ops (idempotent — old customers only had the apex record).
 for record_name in \
   "${SLUG}.western-communication.com" \
-  "coolify.${SLUG}.western-communication.com" \
-  "studio.${SLUG}.western-communication.com" \
-  "api.${SLUG}.western-communication.com"; do
+  "admin-${SLUG}.western-communication.com" \
+  "db-${SLUG}.western-communication.com" \
+  "api-${SLUG}.western-communication.com"; do
   dns_id=$(cf_api GET "/zones/${CF_ZONE_ID}/dns_records?name=${record_name}" \
     | jq -r '.result[0].id // empty')
   if [[ -n "$dns_id" ]]; then

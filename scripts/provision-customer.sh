@@ -103,9 +103,9 @@ fi
 info "[4/9] Creating DNS records (apex + 3 service subdomains)..."
 for record_name in \
   "${SLUG}.western-communication.com" \
-  "coolify.${SLUG}.western-communication.com" \
-  "studio.${SLUG}.western-communication.com" \
-  "api.${SLUG}.western-communication.com"; do
+  "admin-${SLUG}.western-communication.com" \
+  "db-${SLUG}.western-communication.com" \
+  "api-${SLUG}.western-communication.com"; do
   existing_dns=$(cf_api GET "/zones/${CF_ZONE_ID}/dns_records?name=${record_name}" \
     | jq -r '.result[0].id // empty')
   if [[ -n "$existing_dns" ]]; then
@@ -210,9 +210,9 @@ cat <<SUMMARY
 ✅ Customer '${SLUG}' provisioned successfully.
 
    Apps:      https://${SLUG}.western-communication.com
-   Coolify:   https://coolify.${SLUG}.western-communication.com
-   Studio:    https://studio.${SLUG}.western-communication.com
-   API:       https://api.${SLUG}.western-communication.com
+   Coolify:   https://admin-${SLUG}.western-communication.com
+   Studio:    https://db-${SLUG}.western-communication.com
+   API:       https://api-${SLUG}.western-communication.com
    Admin:     ${EMAIL}  (signs in via the WCN console)
 
 Next steps:
