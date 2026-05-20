@@ -76,12 +76,12 @@ for hid in $custom_domains; do
   cf_api DELETE "/zones/${CF_ZONE_ID}/custom_hostnames/${hid}" >/dev/null \
     && ok "  removed custom hostname $hid"
 done
-ok "[2/5] Custom hostnames removed"
+ok "[2/6] Custom hostnames removed"
 
-# ── 3. DNS + tunnel ────────────────────────────────────────────────────
-info "[3/5] Removing DNS record + tunnel..."
+# ── 3. DNS ────────────────────────────────────────────────────────────
+info "[3/6] Removing DNS records..."
 # Mirror the 4 records created in provision-customer.sh step 4. Missing
-# records are no-ops (idempotent — old customers only had the apex record).
+# records are no-ops (idempotent).
 for record_name in \
   "${SLUG}.western-communication.com" \
   "admin-${SLUG}.western-communication.com" \
@@ -94,30 +94,52 @@ for record_name in \
     ok "  ${record_name} removed"
   fi
 done
-if [[ -n "$tunnel_id" && "$tunnel_id" != "(null)" ]]; then
-  # Cleanup tunnel — first delete any DNS routes, then the tunnel itself.
-  cf_api DELETE "/accounts/${CF_ACCOUNT_ID}/cfd_tunnel/${tunnel_id}" >/dev/null \
-    && ok "  Tunnel removed"
-fi
 
 # ── 4. Proxmox VM ─────────────────────────────────────────────────────
-info "[4/5] Stopping + destroying VM ${vmid}..."
+info "[4/6] Stopping + destroying VM ${vmid}..."
 if ssh root@"$PROXMOX_HOST" "qm status ${vmid}" 2>/dev/null | grep -q running; then
   ssh root@"$PROXMOX_HOST" "qm stop ${vmid} --timeout 60 || qm stop ${vmid} --skiplock"
 fi
 ssh root@"$PROXMOX_HOST" "qm destroy ${vmid} --purge --destroy-unreferenced-disks 1" \
   || warn "VM destroy returned non-zero (may already be gone)"
-ok "[4/5] VM ${vmid} destroyed"
+ok "[4/6] VM ${vmid} destroyed"
 
-# ── 5. ops DB ──────────────────────────────────────────────────────────
-info "[5/5] Marking deleted in ops DB..."
+# ── 5. Tunnel ─────────────────────────────────────────────────────────
+# Order matters: delete the tunnel AFTER VM destroy. Previously the tunnel
+# delete ran in step 3 while cloudflared on the live VM still held active
+# connections — CF refused with 400 "tunnel has active connections" and
+# cf_api() doesn't check `.success` in the response, so the script
+# falsely reported "Tunnel removed" and the tunnel persisted as an
+# orphan. CF takes a few seconds to mark connections inactive after
+# cloudflared dies, so retry with backoff.
+info "[5/6] Removing Cloudflare tunnel..."
+if [[ -n "$tunnel_id" && "$tunnel_id" != "(null)" ]]; then
+  for attempt in 1 2 3 4 5 6; do
+    resp=$(cf_api DELETE "/accounts/${CF_ACCOUNT_ID}/cfd_tunnel/${tunnel_id}")
+    if cf_api_ok "$resp"; then
+      ok "  Tunnel ${tunnel_id} removed (attempt ${attempt})"
+      break
+    fi
+    err_msg=$(jq -r '.errors[0].message // "unknown error"' <<<"$resp")
+    if (( attempt == 6 )); then
+      warn "  Tunnel ${tunnel_id} delete failed after 6 attempts: ${err_msg}"
+      warn "  Manual cleanup may be needed (cf_api DELETE /accounts/.../cfd_tunnel/${tunnel_id})."
+      break
+    fi
+    info "  attempt ${attempt}: ${err_msg} — waiting 5s..."
+    sleep 5
+  done
+fi
+
+# ── 6. ops DB ──────────────────────────────────────────────────────────
+info "[6/6] Marking deleted in ops DB..."
 ops_db -c "
   UPDATE customers SET status='deleted', deleted_at=now() WHERE slug='${SLUG}';
   UPDATE vms SET status='destroyed', destroyed_at=now() WHERE customer_slug='${SLUG}';
   UPDATE domains SET status='deleted' WHERE customer_slug='${SLUG}' AND status != 'deleted';
 "
 ops_db_audit "deprovision-done" "$SLUG" "vmid=$vmid"
-ok "[5/5] Marked deleted"
+ok "[6/6] Marked deleted"
 
 cat <<SUMMARY
 
