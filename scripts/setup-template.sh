@@ -187,6 +187,8 @@ no-autoupdate: true
 ingress:
   - hostname: ${CONSOLE_HOSTNAME}
     service: http://localhost:80
+  - hostname: "*.${CONSOLE_HOSTNAME}"
+    service: http://localhost:80
   - service: http_status:404
 YAML
   cloudflared service install || true
