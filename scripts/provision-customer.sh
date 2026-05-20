@@ -97,21 +97,30 @@ else
 fi
 
 # ── 4. DNS record ──────────────────────────────────────────────────────
-console_host="${SLUG}.western-communication.com"
-existing_dns=$(cf_api GET "/zones/${CF_ZONE_ID}/dns_records?name=${console_host}" \
-  | jq -r '.result[0].id // empty')
-if [[ -n "$existing_dns" ]]; then
-  info "[4/9] DNS record exists ($existing_dns)"
-else
-  info "[4/9] Creating DNS record ${console_host}..."
-  body=$(jq -nc \
-    --arg name "$console_host" \
-    --arg content "${TUNNEL_ID}.cfargotunnel.com" \
-    '{type: "CNAME", name: $name, content: $content, proxied: true, ttl: 1}')
-  response=$(cf_api POST "/zones/${CF_ZONE_ID}/dns_records" "$body")
-  cf_api_ok "$response" || die "DNS create failed: $response"
-  ok "[4/9] DNS record created"
-fi
+# Per the subdomain-per-service pivot (03dc5ae) each customer gets 4 records,
+# all CNAME'd to the same cloudflared tunnel hostname. Caddy on the VM
+# dispatches by Host header to the right upstream.
+info "[4/9] Creating DNS records (apex + 3 service subdomains)..."
+for record_name in \
+  "${SLUG}.western-communication.com" \
+  "coolify.${SLUG}.western-communication.com" \
+  "studio.${SLUG}.western-communication.com" \
+  "api.${SLUG}.western-communication.com"; do
+  existing_dns=$(cf_api GET "/zones/${CF_ZONE_ID}/dns_records?name=${record_name}" \
+    | jq -r '.result[0].id // empty')
+  if [[ -n "$existing_dns" ]]; then
+    info "  ${record_name} exists ($existing_dns)"
+  else
+    body=$(jq -nc \
+      --arg name "$record_name" \
+      --arg content "${TUNNEL_ID}.cfargotunnel.com" \
+      '{type: "CNAME", name: $name, content: $content, proxied: true, ttl: 1}')
+    response=$(cf_api POST "/zones/${CF_ZONE_ID}/dns_records" "$body")
+    cf_api_ok "$response" || die "DNS create failed for ${record_name}: $response"
+    ok "  ${record_name} created"
+  fi
+done
+ok "[4/9] DNS records ready"
 
 # ── 5. clone Proxmox VM ───────────────────────────────────────────────
 if pve_api GET "/nodes/dreadnaught/qemu/${VMID}/status/current" \
@@ -200,8 +209,10 @@ cat <<SUMMARY
 
 ✅ Customer '${SLUG}' provisioned successfully.
 
-   Console:   https://${console_host}/coolify
-   Supabase:  https://${console_host}/supabase
+   Apps:      https://${SLUG}.western-communication.com
+   Coolify:   https://coolify.${SLUG}.western-communication.com
+   Studio:    https://studio.${SLUG}.western-communication.com
+   API:       https://api.${SLUG}.western-communication.com
    Admin:     ${EMAIL}  (signs in via the WCN console)
 
 Next steps:

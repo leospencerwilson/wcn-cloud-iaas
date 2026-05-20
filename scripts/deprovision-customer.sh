@@ -80,13 +80,20 @@ ok "[2/5] Custom hostnames removed"
 
 # ── 3. DNS + tunnel ────────────────────────────────────────────────────
 info "[3/5] Removing DNS record + tunnel..."
-host="${SLUG}.western-communication.com"
-dns_id=$(cf_api GET "/zones/${CF_ZONE_ID}/dns_records?name=${host}" \
-  | jq -r '.result[0].id // empty')
-if [[ -n "$dns_id" ]]; then
-  cf_api DELETE "/zones/${CF_ZONE_ID}/dns_records/${dns_id}" >/dev/null
-  ok "  DNS removed"
-fi
+# Mirror the 4 records created in provision-customer.sh step 4. Missing
+# records are no-ops (idempotent — old customers only had the apex record).
+for record_name in \
+  "${SLUG}.western-communication.com" \
+  "coolify.${SLUG}.western-communication.com" \
+  "studio.${SLUG}.western-communication.com" \
+  "api.${SLUG}.western-communication.com"; do
+  dns_id=$(cf_api GET "/zones/${CF_ZONE_ID}/dns_records?name=${record_name}" \
+    | jq -r '.result[0].id // empty')
+  if [[ -n "$dns_id" ]]; then
+    cf_api DELETE "/zones/${CF_ZONE_ID}/dns_records/${dns_id}" >/dev/null
+    ok "  ${record_name} removed"
+  fi
+done
 if [[ -n "$tunnel_id" && "$tunnel_id" != "(null)" ]]; then
   # Cleanup tunnel — first delete any DNS routes, then the tunnel itself.
   cf_api DELETE "/accounts/${CF_ACCOUNT_ID}/cfd_tunnel/${tunnel_id}" >/dev/null \
