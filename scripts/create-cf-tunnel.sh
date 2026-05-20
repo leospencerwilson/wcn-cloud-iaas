@@ -43,11 +43,17 @@ chmod 600 "$cred_path"
 
 ok "Tunnel ${tunnel_id} created, credentials at ${cred_path}"
 
-# Configure ingress: route the customer's <slug>.* host to localhost:80 on the VM (Caddy).
+# Configure ingress. The subdomain-per-service architecture (03dc5ae) puts
+# coolify.SLUG.*, studio.SLUG.*, and api.SLUG.* on their own hostnames, so
+# we accept both the bare SLUG.* apex (Traefik for customer apps) AND a
+# wildcard for any *.SLUG.* sub-subdomain. Caddy on the VM dispatches by
+# Host header.
 config_body=$(jq -nc \
-  --arg hostname "${slug}.western-communication.com" \
+  --arg apex_host "${slug}.western-communication.com" \
+  --arg wild_host "*.${slug}.western-communication.com" \
   '{config: {ingress: [
-    {hostname: $hostname, service: "http://localhost:80"},
+    {hostname: $apex_host, service: "http://localhost:80"},
+    {hostname: $wild_host, service: "http://localhost:80"},
     {service: "http_status:404"}
   ]}}')
 
