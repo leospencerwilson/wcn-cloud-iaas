@@ -25,14 +25,19 @@ require_var() {
 }
 for v in SLUG CONSOLE_HOSTNAME TIER; do require_var "$v"; done
 
-# Coolify dashboard path = /coolify, Supabase Studio path = /supabase.
-# Caddy strips the prefix and passes to the upstream service.
-#
-# Auth: every protected path runs `forward_auth` against the WCN console's
+# ── Domain layout ─────────────────────────────────────────────────────
+# Each upstream gets its own subdomain so it can serve from root path —
+# Coolify (Laravel), Studio (Next.js) and Kong all generate root-anchored
+# URLs/redirects/assets that don't honour X-Forwarded-Prefix. Cookies stay
+# scoped to .western-communication.com so console SSO covers all four.
+COOLIFY_HOSTNAME="coolify.${CONSOLE_HOSTNAME}"
+STUDIO_HOSTNAME="studio.${CONSOLE_HOSTNAME}"
+API_HOSTNAME="api.${CONSOLE_HOSTNAME}"
+
+# Auth: every protected host runs `forward_auth` against the WCN console's
 # /api/verify endpoint. The console issues a signed cookie on successful
 # login at https://console.western-communication.com and that cookie is
-# scoped to *.western-communication.com so it's sent on this host too.
-
+# scoped to *.western-communication.com so it's sent on all four hosts.
 WCN_VERIFY="${WCN_VERIFY:-https://console.western-communication.com}"
 
 cat <<CADDY
@@ -46,56 +51,20 @@ cat <<CADDY
 }
 
 # Reusable forward_auth snippet: validates the wcn-fa cookie via the console.
-# The console's /api/verify decides allow/deny based on the customer slug
-# parsed from X-Forwarded-Host, so we MUST forward the original host.
+# X-Wcn-Slug is sent explicitly so /api/verify doesn't have to parse the slug
+# out of X-Forwarded-Host (which may now be coolify.SLUG.*, studio.SLUG.*, …).
 (wcn_auth) {
     forward_auth ${WCN_VERIFY} {
         uri /api/verify
         header_up X-Forwarded-Host {host}
+        header_up X-Wcn-Slug ${SLUG}
         copy_headers X-Wcn-User-Id X-Wcn-Role X-Wcn-Customer-Slug
     }
 }
 
-# Console host (served via Cloudflare Tunnel — origin sees plain HTTP)
+# ── Customer app workloads (Coolify-managed, Host-header routed) ──────
 http://${CONSOLE_HOSTNAME} {
     encode gzip
-
-    # —— /coolify : Coolify UI + API ——
-    handle_path /coolify/* {
-        import wcn_auth
-        reverse_proxy http://127.0.0.1:8000 {
-            header_up X-Forwarded-Prefix /coolify
-        }
-    }
-
-    # —— /supabase : Supabase Studio (only if tier has DB) ——
-CADDY
-
-if [[ "$SUPABASE_PRESET" != "none" ]]; then
-cat <<CADDY
-    handle_path /supabase/* {
-        import wcn_auth
-        reverse_proxy http://127.0.0.1:3000 {
-            header_up X-Forwarded-Prefix /supabase
-        }
-    }
-
-    # —— /api : Supabase Kong (PostgREST, Auth, Storage) ——
-    # No forward_auth here — callers authenticate with the Supabase anon
-    # or service-role key, which Kong validates.
-    handle_path /api/* {
-        reverse_proxy http://127.0.0.1:8001
-    }
-CADDY
-else
-cat <<CADDY
-    # supabase paths disabled — tier=${TIER} has no DB
-    handle_path /supabase/* { respond "Not available on your plan" 404 }
-    handle_path /api/* { respond "Not available on your plan" 404 }
-CADDY
-fi
-
-cat <<CADDY
 
     # —— branding overlay (CSS injection for the Coolify UI) ——
     handle_path /assets/wcn-overlay.css {
@@ -105,16 +74,12 @@ cat <<CADDY
     }
 
     # —— /healthz (used by external monitoring) ——
-    # Wrapped in `handle` so it shares routing group with the catch-all below;
-    # bare `respond /healthz` is auto-sorted AFTER `handle {}`, making it
-    # unreachable.
     handle /healthz {
         respond "ok" 200
     }
 
-    # —— Catch-all: app workloads (Coolify-managed) get routed by their Host
-    # header to Traefik. Port 8081 matches the proxy compose binding
-    # (127.0.0.1:8081:80 — see /data/coolify/proxy/docker-compose.yml).
+    # —— Catch-all → Traefik. Port 8081 matches the proxy compose binding
+    #     (127.0.0.1:8081:80 — see /data/coolify/proxy/docker-compose.yml).
     handle {
         reverse_proxy http://127.0.0.1:8081
     }
@@ -124,7 +89,56 @@ cat <<CADDY
         format json
     }
 }
+
+# ── Coolify dashboard ─────────────────────────────────────────────────
+http://${COOLIFY_HOSTNAME} {
+    encode gzip
+    import wcn_auth
+    reverse_proxy http://127.0.0.1:8000
+    log {
+        output file /var/log/caddy/access.log
+        format json
+    }
+}
 CADDY
+
+if [[ "$SUPABASE_PRESET" != "none" ]]; then
+cat <<CADDY
+
+# ── Supabase Studio ───────────────────────────────────────────────────
+http://${STUDIO_HOSTNAME} {
+    encode gzip
+    import wcn_auth
+    reverse_proxy http://127.0.0.1:3000
+    log {
+        output file /var/log/caddy/access.log
+        format json
+    }
+}
+
+# ── Supabase Kong (API) ───────────────────────────────────────────────
+# No wcn_auth — Kong validates the anon/service-role JWT itself.
+http://${API_HOSTNAME} {
+    encode gzip
+    reverse_proxy http://127.0.0.1:8001
+    log {
+        output file /var/log/caddy/access.log
+        format json
+    }
+}
+CADDY
+else
+cat <<CADDY
+
+# studio.* and api.* disabled — tier=${TIER} has no DB.
+http://${STUDIO_HOSTNAME} {
+    respond "Not available on your plan" 404
+}
+http://${API_HOSTNAME} {
+    respond "Not available on your plan" 404
+}
+CADDY
+fi
 
 # Per-domain blocks for any custom hostnames the customer's added.
 for d in "${extra_domains[@]}"; do
@@ -133,7 +147,7 @@ for d in "${extra_domains[@]}"; do
 # Custom domain
 http://${d} {
     encode gzip
-    reverse_proxy http://127.0.0.1:8080
+    reverse_proxy http://127.0.0.1:8081
     log {
         output file /var/log/caddy/${d//[^a-z0-9]/_}.log
         format json
