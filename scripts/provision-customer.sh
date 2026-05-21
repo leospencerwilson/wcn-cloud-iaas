@@ -54,24 +54,24 @@ if [[ -n "$existing" ]]; then
   if ! $RESUME; then
     die "Slug '$SLUG' exists with status='$existing'. Use --resume to continue, or pick another slug."
   fi
-  info "[1/9] Resuming existing customer ($existing)... ok"
+  info "[1/10] Resuming existing customer ($existing)... ok"
 else
-  info "[1/9] Creating customer record..."
+  info "[1/10] Creating customer record..."
   ops_db -c "INSERT INTO customers (slug, name, tier, contact_email, brand_primary, status) VALUES (
     '${SLUG}', \$\$${NAME}\$\$, '${TIER}', '${EMAIL}', '${BRAND_COLOUR}', 'provisioning')"
   ops_db_audit "provision-start" "$SLUG" "tier=$TIER, email=$EMAIL"
-  ok "[1/9] Customer record created"
+  ok "[1/10] Customer record created"
 fi
 
 # ── 2. allocate VMID + IP ──────────────────────────────────────────────
 existing_vmid=$(ops_db -c "SELECT vmid FROM vms WHERE customer_slug='$SLUG'")
 if [[ -n "$existing_vmid" ]]; then
   VMID="$existing_vmid"
-  info "[2/9] Reusing VMID $VMID"
+  info "[2/10] Reusing VMID $VMID"
 else
-  info "[2/9] Allocating VMID..."
+  info "[2/10] Allocating VMID..."
   VMID=$("$HERE/pick-next-vmid.sh" "$SLUG")
-  ok "[2/9] VMID $VMID allocated"
+  ok "[2/10] VMID $VMID allocated"
 fi
 
 existing_ip=$(ops_db -c "SELECT ip FROM vms WHERE customer_slug='$SLUG' AND ip IS NOT NULL")
@@ -88,19 +88,19 @@ existing_tunnel=$(ops_db -c "SELECT tunnel_id FROM vms WHERE customer_slug='$SLU
 CRED_PATH="/tmp/wcn-cloud-${SLUG}-cred.json"
 if [[ -n "$existing_tunnel" ]]; then
   TUNNEL_ID="$existing_tunnel"
-  info "[3/9] Reusing tunnel $TUNNEL_ID"
+  info "[3/10] Reusing tunnel $TUNNEL_ID"
 else
-  info "[3/9] Creating Cloudflare Tunnel..."
+  info "[3/10] Creating Cloudflare Tunnel..."
   TUNNEL_ID=$("$HERE/create-cf-tunnel.sh" "$SLUG" "$CRED_PATH")
   ops_db -c "UPDATE vms SET tunnel_id='$TUNNEL_ID' WHERE customer_slug='$SLUG'"
-  ok "[3/9] Tunnel $TUNNEL_ID created"
+  ok "[3/10] Tunnel $TUNNEL_ID created"
 fi
 
 # ── 4. DNS record ──────────────────────────────────────────────────────
 # Per the subdomain-per-service pivot (03dc5ae) each customer gets 4 records,
 # all CNAME'd to the same cloudflared tunnel hostname. Caddy on the VM
 # dispatches by Host header to the right upstream.
-info "[4/9] Creating DNS records (apex + 3 service subdomains)..."
+info "[4/10] Creating DNS records (apex + 3 service subdomains)..."
 for record_name in \
   "${SLUG}.western-communication.com" \
   "admin-${SLUG}.western-communication.com" \
@@ -120,21 +120,21 @@ for record_name in \
     ok "  ${record_name} created"
   fi
 done
-ok "[4/9] DNS records ready"
+ok "[4/10] DNS records ready"
 
 # ── 5. clone Proxmox VM ───────────────────────────────────────────────
 if pve_api GET "/nodes/dreadnaught/qemu/${VMID}/status/current" \
    | jq -e '.data.status' >/dev/null 2>&1; then
-  info "[5/9] VM ${VMID} already exists"
+  info "[5/10] VM ${VMID} already exists"
 else
-  info "[5/9] Cloning template ${TEMPLATE_VMID:-9002} → VMID ${VMID} (this takes ~3 min)..."
+  info "[5/10] Cloning template ${TEMPLATE_VMID:-9002} → VMID ${VMID} (this takes ~3 min)..."
   pssh root@"$PROXMOX_HOST" "qm clone ${TEMPLATE_VMID:-9002} ${VMID} --name wcn-cloud-${SLUG} --full" \
     || die "Clone failed"
-  ok "[5/9] Cloned"
+  ok "[5/10] Cloned"
 fi
 
 # ── 6. configure VM ───────────────────────────────────────────────────
-info "[6/9] Configuring VM (cloud-init)..."
+info "[6/10] Configuring VM (cloud-init)..."
 pssh root@"$PROXMOX_HOST" bash -s <<EOF
 qm set ${VMID} \
   --ipconfig0 ip=${IP}/24,gw=10.10.31.1 \
@@ -143,21 +143,21 @@ qm set ${VMID} \
   --sshkeys ~/.ssh/authorized_keys \
   --tags "wcn-cloud,customer,${TIER}"
 EOF
-ok "[6/9] Configured"
+ok "[6/10] Configured"
 
 # ── 7. start VM ────────────────────────────────────────────────────────
 status=$(pve_api GET "/nodes/dreadnaught/qemu/${VMID}/status/current" | jq -r '.data.status')
 if [[ "$status" == "running" ]]; then
-  info "[7/9] VM already running"
+  info "[7/10] VM already running"
 else
-  info "[7/9] Starting VM..."
+  info "[7/10] Starting VM..."
   pssh root@"$PROXMOX_HOST" "qm start ${VMID}"
 fi
 "$HERE/wait-for-vm-ready.sh" "$VMID" "$IP"
-ok "[7/9] VM ready"
+ok "[7/10] VM ready"
 
 # ── 8. push customer.env + run firstboot ──────────────────────────────
-info "[8/9] Pushing customer.env + tunnel cred, running firstboot..."
+info "[8/10] Pushing customer.env + tunnel cred, running firstboot..."
 "$HERE/render-customer-env.sh" \
   --slug "$SLUG" --tier "$TIER" --name "$NAME" \
   --email "$EMAIL" --domain "$DOMAIN" \
@@ -185,7 +185,7 @@ pssh ops@"$IP" 'sudo install -m 600 -o root -g root /tmp/customer.env /etc/wcn-c
                   fi && \
                   sudo systemctl start wcn-firstboot.service && \
                   sudo systemctl status wcn-firstboot.service --no-pager'
-ok "[8/9] Firstboot complete"
+ok "[8/10] Firstboot complete"
 
 # scrub local tmp files (they contain secrets)
 rm -f "/tmp/customer-${SLUG}.env" "/tmp/supabase-${SLUG}.env"
@@ -193,9 +193,72 @@ rm -f "/tmp/customer-${SLUG}.env" "/tmp/supabase-${SLUG}.env"
 # ── 9. health check + finalise ────────────────────────────────────────
 # Auth is enforced by the WCN console (Caddy forward_auth → /api/verify),
 # not Cloudflare Access. No per-customer CF Access apps to create.
-info "[9/9] Health check..."
+info "[9/10] Health check..."
 sleep 10
 "$HERE/customer-health-check.sh" "$SLUG" || die "Health check failed — investigate"
+
+# ── 10. Coolify service account + API token ───────────────────────────
+# Auto-creates a service-account User+Team inside the customer's Coolify
+# (Coolify v4 has no public registration API; we go via artisan tinker
+# inside the running container). The token is stored in ops_db so the
+# console can call Coolify on the customer's behalf.
+info "[10/10] Bootstrapping Coolify service account + API token..."
+
+coolify_bootstrap_script=$(cat <<'PHP'
+// Enable the API (off by default in Coolify v4)
+\App\Models\InstanceSettings::get()->update(['is_api_enabled' => true]);
+
+// Already bootstrapped? Re-use the existing user but rotate the token
+// (the plaintext can't be recovered from the DB hash).
+$email = 'wcn-service@western-communication.com';
+$existing = \App\Models\User::where('email', $email)->first();
+
+if ($existing) {
+  $team = \App\Models\Team::whereHas('members', fn($q) => $q->where('users.id', $existing->id))->first();
+  $u = $existing;
+  \DB::table('personal_access_tokens')
+    ->where('tokenable_id', $u->id)->where('name', 'wcn-console')
+    ->delete();
+} else {
+  $team = new \App\Models\Team();
+  $team->name = 'WCN Service';
+  $team->personal_team = true;
+  $team->save();
+
+  $u = new \App\Models\User();
+  $u->name = 'WCN Service Account';
+  $u->email = $email;
+  $u->password = bcrypt(\Str::random(64));
+  $u->email_verified_at = now();
+  $u->save();
+
+  \DB::table('team_user')->insert([
+    'team_id' => $team->id, 'user_id' => $u->id, 'role' => 'owner',
+    'created_at' => now(), 'updated_at' => now(),
+  ]);
+}
+
+// Sanctum token — replicate Coolify's User::createToken() format because
+// that method depends on session('currentTeam') which isn't set in tinker.
+$entropy = \Str::random(40);
+$plain   = $entropy . hash('crc32b', $entropy);
+$hashed  = hash('sha256', $plain);
+$tid = \DB::table('personal_access_tokens')->insertGetId([
+  'name' => 'wcn-console', 'token' => $hashed,
+  'abilities' => json_encode(['read','write','deploy']),
+  'tokenable_id' => $u->id, 'tokenable_type' => 'App\\Models\\User',
+  'team_id' => $team->id, 'expires_at' => null,
+  'created_at' => now(), 'updated_at' => now(),
+]);
+echo 'WCN_COOLIFY_API_TOKEN=' . $tid . '|' . $plain . "\n";
+PHP
+)
+coolify_token=$(pssh ops@"$IP" sudo docker exec coolify php artisan tinker --execute="$coolify_bootstrap_script" 2>/dev/null \
+  | grep -oE 'WCN_COOLIFY_API_TOKEN=[0-9]+\|[A-Za-z0-9]+' | cut -d= -f2)
+
+[[ -n "$coolify_token" ]] || die "Coolify token bootstrap failed (no token in tinker output)"
+ops_db -c "UPDATE vms SET coolify_api_token='${coolify_token}' WHERE customer_slug='$SLUG'" >/dev/null
+ok "[10/10] Coolify API token stored (tid=${coolify_token%%|*})"
 
 ops_db -c "UPDATE customers SET status='active' WHERE slug='$SLUG'"
 ops_db_audit "provision-done" "$SLUG" "vmid=$VMID, ip=$IP, tunnel=$TUNNEL_ID"
@@ -203,7 +266,7 @@ ops_db_audit "provision-done" "$SLUG" "vmid=$VMID, ip=$IP, tunnel=$TUNNEL_ID"
 # Cleanup local cred file
 rm -f "$CRED_PATH" "/tmp/customer-${SLUG}.env"
 
-ok "[9/9] All checks passed"
+ok "[10/10] All checks passed"
 
 cat <<SUMMARY
 
