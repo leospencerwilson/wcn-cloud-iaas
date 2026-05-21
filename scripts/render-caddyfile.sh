@@ -66,7 +66,7 @@ cat <<CADDY
         copy_headers X-Wcn-User-Id X-Wcn-Role X-Wcn-Customer-Slug
         # When the console reports the user as unauthenticated (401),
         # redirect their browser to the console's login page with a
-        # `next` param carrying the original URL (the host + the path
+        # 'next' param carrying the original URL (the host + the path
         # before any handle_path stripped a prefix — orig_uri preserves
         # it). After sign-in the console uses next= to return them.
         @unauthenticated status 401
