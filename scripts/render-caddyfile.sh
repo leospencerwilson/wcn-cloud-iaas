@@ -64,6 +64,15 @@ cat <<CADDY
         header_up X-Forwarded-Host {host}
         header_up X-Wcn-Slug ${SLUG}
         copy_headers X-Wcn-User-Id X-Wcn-Role X-Wcn-Customer-Slug
+        # When the console reports the user as unauthenticated (401),
+        # redirect their browser to the console's login page with a
+        # `next` param carrying the original URL (the host + the path
+        # before any handle_path stripped a prefix — orig_uri preserves
+        # it). After sign-in the console uses next= to return them.
+        @unauthenticated status 401
+        handle_response @unauthenticated {
+            redir ${WCN_VERIFY}/login?next=https://{host}{http.request.orig_uri} 302
+        }
     }
 }
 
