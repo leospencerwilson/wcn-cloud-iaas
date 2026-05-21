@@ -61,6 +61,19 @@ function readBody(req) {
 }
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/;
+const apps = require("./apps");
+
+function readBodyOr(req) {
+  return readBody(req).catch(() => ({}));
+}
+
+// Validate ?slug= or X-Wcn-Customer-Slug header against SLUG_RE
+function slugFromReq(req, parsedUrl) {
+  const fromQuery = parsedUrl.searchParams.get("slug");
+  const fromHdr   = req.headers["x-wcn-customer-slug"];
+  const slug = fromQuery || fromHdr || "";
+  return SLUG_RE.test(slug) ? slug : null;
+}
 
 function enqueue(kind, slug, extraArgs = []) {
   const jobId = randomUUID();
@@ -292,6 +305,59 @@ const server = http.createServer(async (req, res) => {
       startedAt: job.startedAt,
       finishedAt: job.finishedAt,
     });
+  }
+
+  // — /apps/* —
+  const u = new URL(req.url || "/", "http://localhost");
+  const m1 = /^\/apps\/?$/.exec(u.pathname);
+  const m2 = /^\/apps\/([0-9a-f-]{36})$/.exec(u.pathname);
+  const m3 = /^\/apps\/([0-9a-f-]{36})\/(deploy|deployments|logs|env)$/.exec(u.pathname);
+  const m4 = /^\/apps\/([0-9a-f-]{36})\/domains\/?$/.exec(u.pathname);
+  const m5 = /^\/apps\/([0-9a-f-]{36})\/domains\/([^\/]+)$/.exec(u.pathname);
+
+  const slug = slugFromReq(req, u);
+  const query = Object.fromEntries(u.searchParams);
+
+  try {
+    if (m1 && req.method === "GET") {
+      if (!slug) return json(res, 400, { error: "missing slug", code: "missing_slug" });
+      return apps.list(req, res, { slug, query });
+    }
+    if (m1 && req.method === "POST") {
+      if (!slug) return json(res, 400, { error: "missing slug", code: "missing_slug" });
+      const body = await readBodyOr(req);
+      return apps.create(req, res, { slug, body });
+    }
+    if (m2) {
+      const params = { id: m2[1] };
+      if (!slug) return json(res, 400, { error: "missing slug", code: "missing_slug" });
+      if (req.method === "GET")    return apps.get(req, res,    { slug, params });
+      if (req.method === "PATCH")  return apps.patch(req, res,  { slug, params, body: await readBodyOr(req) });
+      if (req.method === "DELETE") return apps.delete(req, res, { slug, params });
+    }
+    if (m3) {
+      const params = { id: m3[1] }, action = m3[2];
+      if (!slug) return json(res, 400, { error: "missing slug", code: "missing_slug" });
+      if (action === "deploy"      && req.method === "POST") return apps.deploy(req, res,      { slug, params, body: await readBodyOr(req) });
+      if (action === "deployments" && req.method === "GET")  return apps.deployments(req, res, { slug, params });
+      if (action === "logs"        && req.method === "GET")  return apps.logs(req, res,        { slug, params, query });
+      if (action === "env"         && req.method === "GET")  return apps.envGet(req, res,      { slug, params });
+      if (action === "env"         && req.method === "PUT")  return apps.envPut(req, res,      { slug, params, body: await readBodyOr(req) });
+    }
+    if (m4) {
+      const params = { id: m4[1] };
+      if (!slug) return json(res, 400, { error: "missing slug", code: "missing_slug" });
+      if (req.method === "GET")  return apps.domainsList(req, res, { slug, params });
+      if (req.method === "POST") return apps.domainAdd(req, res,   { slug, params, body: await readBodyOr(req) });
+    }
+    if (m5) {
+      const params = { id: m5[1], hostname: decodeURIComponent(m5[2]) };
+      if (!slug) return json(res, 400, { error: "missing slug", code: "missing_slug" });
+      if (req.method === "GET")    return apps.domainStatus(req, res, { slug, params });
+      if (req.method === "DELETE") return apps.domainDelete(req, res, { slug, params });
+    }
+  } catch (e) {
+    return json(res, e.status || 500, { error: e.message, code: e.code || "internal_error" });
   }
 
   json(res, 404, { error: "not found" });
