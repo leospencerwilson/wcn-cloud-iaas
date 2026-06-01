@@ -22,3 +22,10 @@ Thumbs.db
 # Logs / scratch
 *.log
 /tmp/
+
+# Script backups (created by chmod/edit workflows)
+*.bak
+*.bak.*
+
+# Per-customer Prometheus targets (managed by install-metrics.sh)
+prometheus/targets/
