@@ -1,7 +1,6 @@
 // ops_db wrapper. Shells out to psql since we keep the provisioner npm-dep-free.
-// All values pass via psql's :'name' variable substitution (proper SQL quoting,
-// not naive string concat). Result rows are JSON via row_to_json so parsing is
-// a one-liner.
+// All values pass via psql's quote-escaping helper (no naive string concat).
+// Results selecting row_to_json(t) come back as JSON for easy parsing.
 
 const { spawn } = require("child_process");
 
@@ -10,8 +9,6 @@ if (!OPS_DB_URL) {
   console.error("OPS_DB_URL not set"); process.exit(1);
 }
 
-// pgQuote: format a JS value as a Postgres literal. Used for inline SQL where
-// we can't use psql -v (e.g. arrays, JSON). Strings are single-quote-escaped.
 function pgQuote(v) {
   if (v === null || v === undefined) return "NULL";
   if (typeof v === "boolean") return v ? "true" : "false";
@@ -22,7 +19,6 @@ function pgQuote(v) {
   return `'${String(v).replace(/'/g, "''")}'`;
 }
 
-// Run psql with the SQL; returns stdout as string. Throws on non-zero exit.
 function runPsql(sql) {
   return new Promise((resolve, reject) => {
     const args = [OPS_DB_URL, "-X", "-At", "-F", "|", "-q", "-c", sql];
@@ -40,32 +36,37 @@ function runPsql(sql) {
   });
 }
 
-// Build SQL with $1, $2, … substituted with pgQuote'd params.
 function format(sql, params = []) {
   return sql.replace(/\$(\d+)/g, (_, n) => pgQuote(params[+n - 1]));
 }
 
-// Query returning rows-of-columns (split by |). Use for ad-hoc queries.
 async function rows(sql, params = []) {
   const out = await runPsql(format(sql, params));
   if (!out.trim()) return [];
   return out.trim().split("\n").map((l) => l.split("|"));
 }
 
-// Query returning rows as parsed JSON objects. SQL must SELECT row_to_json(t)
-// from a subquery aliased t.
 async function rowsJson(sql, params = []) {
-  const r = await rows(sql, params);
-  return r.map((cols) => JSON.parse(cols[0]));
+  // Each line of psql output is one row's row_to_json JSON document.
+  // We do NOT split on the | column delimiter — row_to_json values can
+  // legitimately contain | (e.g. Sanctum tokens of the form id|secret).
+  const out = await runPsql(format(sql, params));
+  if (!out.trim()) return [];
+  return out.trim().split("\n").map((line) => {
+    try { return JSON.parse(line); }
+    catch (e) {
+      const err = new Error(`psql output not valid JSON: ${line.slice(0, 120)}…`);
+      err.code = "db_parse_error";
+      throw err;
+    }
+  });
 }
 
-// First-row-or-null variant of rowsJson.
 async function oneJson(sql, params = []) {
   const r = await rowsJson(sql, params);
   return r[0] ?? null;
 }
 
-// Run a statement that doesn't return rows (INSERT/UPDATE/DELETE without RETURNING).
 async function exec(sql, params = []) {
   await runPsql(format(sql, params));
 }

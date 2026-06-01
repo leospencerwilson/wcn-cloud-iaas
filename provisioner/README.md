@@ -55,29 +55,3 @@ Jobs are serial — the queue holds requests while one runs.
   it ever reaches the shell. The script's own `validate_slug` is the
   second line of defence.
 - `--force` is the only optional flag forwarded.
-
-## App management API (added 2026-05-21)
-
-All endpoints require the same Bearer token. Slug scope is enforced via the
-`?slug=` query parameter or `X-Wcn-Customer-Slug` header.
-
-| Method | Path                                          | Notes                                     |
-|--------|-----------------------------------------------|-------------------------------------------|
-| GET    | `/apps?slug=<slug>`                           | list apps                                 |
-| POST   | `/apps?slug=<slug>`                           | create app (also creates in Coolify)      |
-| GET    | `/apps/:id`                                   |                                           |
-| PATCH  | `/apps/:id`                                   | partial update                            |
-| DELETE | `/apps/:id`                                   | DB + Coolify                              |
-| POST   | `/apps/:id/deploy`                            | triggers Coolify deployment               |
-| GET    | `/apps/:id/deployments`                       | deployment history                        |
-| GET    | `/apps/:id/logs?tail=N`                       | container logs                            |
-| GET    | `/apps/:id/env`                               | env vars from ops_db                      |
-| PUT    | `/apps/:id/env`                               | replace all env vars; syncs to Coolify    |
-| GET    | `/apps/:id/domains`                           | custom domains for this app               |
-| POST   | `/apps/:id/domains` `{hostname}`              | _stub — full impl in PR 3_                |
-| GET    | `/apps/:id/domains/:hostname`                 | _stub_                                    |
-| DELETE | `/apps/:id/domains/:hostname`                 | _stub_                                    |
-
-Domain endpoints are intentional 501s until `add-custom-domain.sh` is
-refactored into a callable library (PR 3). The list endpoint works (reads
-`ops_db.domains` directly).

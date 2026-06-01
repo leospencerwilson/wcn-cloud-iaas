@@ -4,7 +4,6 @@
 
 const db = require("./db");
 
-// Build a client bound to a specific customer's coolify_api_token + IP.
 async function forSlug(slug) {
   const row = await db.oneJson(`
     SELECT row_to_json(t) FROM (
