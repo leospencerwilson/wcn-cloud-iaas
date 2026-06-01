@@ -17,15 +17,31 @@ CREATE TABLE IF NOT EXISTS customers (
     brand_primary     text         DEFAULT '#3b82f6',
     brand_secondary   text         DEFAULT '#1f2937',
     status            text         NOT NULL DEFAULT 'provisioning'
-                                   CHECK (status IN ('provisioning', 'active', 'suspended', 'deleted')),
+                                   CHECK (status IN ('provisioning', 'active', 'suspended', 'deleted', 'archived')),
     created_at        timestamptz  NOT NULL DEFAULT now(),
     activated_at      timestamptz,
     deleted_at        timestamptz,
+    archived_at       timestamptz,
     notes             text,
+    billing_contact_email   text,
+    billing_contact_name    text,
+    technical_contact_email text,
+    technical_contact_name  text,
+    billing_address         text,
+    vat_number              text,
+    go_live_date            date,
     last_job_id       text         -- latest provisioner job id, set by the console
 );
 
-ALTER TABLE customers ADD COLUMN IF NOT EXISTS last_job_id text;
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS last_job_id             text;
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS archived_at             timestamptz;
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS billing_contact_email   text;
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS billing_contact_name    text;
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS technical_contact_email text;
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS technical_contact_name  text;
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS billing_address         text;
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS vat_number              text;
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS go_live_date            date;
 
 CREATE INDEX IF NOT EXISTS customers_status_idx ON customers (status);
 

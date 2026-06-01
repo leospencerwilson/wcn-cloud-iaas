@@ -290,12 +290,24 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // GET /jobs/:id  or  GET /jobs/:id/stream
-  const m = /^\/jobs\/([0-9a-f-]{36})(\/stream)?$/.exec(req.url || "");
+  // GET /jobs/:id  or  GET /jobs/:id/stream  or  GET /jobs/:id/log
+  const m = /^\/jobs\/([0-9a-f-]{36})(\/stream|\/log)?$/.exec(req.url || "");
   if (m && req.method === "GET") {
     const job = jobs.get(m[1]);
     if (!job) return json(res, 404, { error: "not found" });
-    if (m[2]) return streamLog(req, res, job);
+    if (m[2] === "/stream") return streamLog(req, res, job);
+    if (m[2] === "/log") {
+      fs.readFile(job.logPath, "utf8", (err, data) => {
+        if (err) {
+          res.writeHead(200, { "content-type": "text/plain" });
+          res.end("");
+          return;
+        }
+        res.writeHead(200, { "content-type": "text/plain" });
+        res.end(data);
+      });
+      return;
+    }
     return json(res, 200, {
       jobId: job.jobId,
       kind: job.kind,
@@ -305,6 +317,28 @@ const server = http.createServer(async (req, res) => {
       startedAt: job.startedAt,
       finishedAt: job.finishedAt,
     });
+  }
+
+  // POST /jobs/:id/cancel
+  const mc = /^\/jobs\/([0-9a-f-]{36})\/cancel$/.exec(req.url || "");
+  if (mc && req.method === "POST") {
+    const job = jobs.get(mc[1]);
+    if (!job) return json(res, 404, { error: "not found" });
+    if (job.status === "queued") {
+      const idx = queue.indexOf(job);
+      if (idx >= 0) queue.splice(idx, 1);
+      job.status = "failed";
+      job.exitCode = -1;
+      job.finishedAt = new Date().toISOString();
+      return json(res, 200, { ok: true, cancelled: "queued" });
+    }
+    if (job.status === "running" && job.proc) {
+      try {
+        job.proc.kill("SIGTERM");
+      } catch (e) {}
+      return json(res, 200, { ok: true, cancelled: "running" });
+    }
+    return json(res, 409, { error: "not cancellable", status: job.status });
   }
 
   // — /apps/* —
