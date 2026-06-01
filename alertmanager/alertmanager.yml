@@ -1,0 +1,19 @@
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: 'wcn-provisioner'
+  group_by: ['alertname', 'slug']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+receivers:
+  - name: 'wcn-provisioner'
+    webhook_configs:
+      - url: 'http://host.docker.internal:9000/alerts/webhook'
+        send_resolved: true
+        http_config:
+          authorization:
+            type: Bearer
+            credentials: '3691f9cacae50f57a808e32ddb989d29e1fbbc5b93954276b4357e3a87071e38'

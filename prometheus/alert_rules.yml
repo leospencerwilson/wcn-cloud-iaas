@@ -1,0 +1,52 @@
+groups:
+  - name: wcn-cloud-defaults
+    interval: 30s
+    rules:
+
+      - alert: VMDown
+        expr: up{kind="node"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "VM is unreachable"
+          description: "{{ $labels.slug }} node_exporter has been down for 2+ minutes"
+
+      - alert: CAdvisorDown
+        expr: up{kind="cadvisor"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "cAdvisor scrape failing"
+          description: "{{ $labels.slug }} cAdvisor unreachable for 5+ minutes"
+
+      - alert: HighCPU
+        expr: |
+          (1 - avg by (slug) (rate(node_cpu_seconds_total{mode="idle",kind="node"}[5m]))) * 100 > 90
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage"
+          description: "{{ $labels.slug }} CPU above 90% for 10+ minutes"
+
+      - alert: HighMemory
+        expr: |
+          (1 - (node_memory_MemAvailable_bytes{kind="node"} / node_memory_MemTotal_bytes{kind="node"})) * 100 > 90
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage"
+          description: "{{ $labels.slug }} memory above 90% for 10+ minutes"
+
+      - alert: LowDisk
+        expr: |
+          (node_filesystem_avail_bytes{mountpoint="/",kind="node"} / node_filesystem_size_bytes{mountpoint="/",kind="node"}) * 100 < 10
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Low disk space"
+          description: "{{ $labels.slug }} root filesystem below 10% free"
