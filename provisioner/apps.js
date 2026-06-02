@@ -8,6 +8,38 @@ const domains = require("./domains");
 
 const NAME_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
 
+// Resolve the actual docker container name on the customer VM for a
+// given Coolify application UUID. Coolify names application containers
+// `<coolify_app_uuid>-<deployment_id>`, which the public API doesn't
+// reliably surface — querying `/applications/{uuid}` returns no
+// `container_name` field, and the historical fallback `${name}-${uuid}`
+// was wrong (the parts are swapped). We do a one-shot SSH `docker ps`
+// filter to find the live container.
+function resolveContainerName(vmIp, coolifyAppUuid) {
+  return new Promise((resolve) => {
+    const out = [];
+    const proc = spawn(
+      "ssh",
+      [
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-o", "ConnectTimeout=10",
+        `ops@${vmIp}`,
+        "sudo", "docker", "ps",
+        "--filter", `name=${coolifyAppUuid}`,
+        "--format", "{{.Names}}",
+        "--latest",
+      ],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
+    proc.stdout.on("data", (d) => out.push(d.toString()));
+    proc.on("close", (code) => {
+      if (code !== 0) return resolve(null);
+      const name = out.join("").trim().split("\n")[0];
+      resolve(name || null);
+    });
+  });
+}
+
 function json(res, code, body) {
   res.writeHead(code, { "content-type": "application/json" });
   res.end(JSON.stringify(body));
@@ -389,14 +421,9 @@ async function streamRuntimeLogs(req, res, { slug, params, query }) {
   );
   if (!vm) return bad(res, 404, "vm not found", "not_found");
 
-  let containerName;
-  try {
-    const cf = await coolify.forSlug(slug);
-    const info = await cf.get(`/applications/${app.coolify_app_uuid}`);
-    containerName = info.container_name || info.containerName ||
-                    `${app.name}-${app.coolify_app_uuid}`;
-  } catch (e) {
-    return bad(res, 502, `coolify: ${e.message}`, "coolify_error");
+  const containerName = await resolveContainerName(vm.ip, app.coolify_app_uuid);
+  if (!containerName) {
+    return bad(res, 503, "container not running yet", "container_not_found");
   }
 
   sseHeaders(res);
@@ -494,14 +521,9 @@ async function execCommand(req, res, { slug, params, body }) {
   );
   if (!vm) return bad(res, 404, "vm not found", "not_found");
 
-  let containerName;
-  try {
-    const cf = await coolify.forSlug(slug);
-    const info = await cf.get(`/applications/${app.coolify_app_uuid}`);
-    containerName = info.container_name || info.containerName ||
-                    `${app.name}-${app.coolify_app_uuid}`;
-  } catch (e) {
-    return bad(res, 502, `coolify: ${e.message}`, "coolify_error");
+  const containerName = await resolveContainerName(vm.ip, app.coolify_app_uuid);
+  if (!containerName) {
+    return bad(res, 503, "container not running", "container_not_found");
   }
 
   // Audit
