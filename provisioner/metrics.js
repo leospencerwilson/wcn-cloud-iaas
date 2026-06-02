@@ -136,21 +136,14 @@ async function appMetrics(req, res, { slug, params, query }) {
   const win = WINDOWS[winKey];
   if (!win) return bad(res, 400, "invalid window — use 1h|24h|7d|30d", "invalid_window");
 
-  // Resolve container name once via Coolify
-  let containerName;
-  try {
-    const cf = await coolify.forSlug(slug);
-    const info = await cf.get(`/applications/${app.coolify_app_uuid}`);
-    containerName = info.container_name || info.containerName ||
-                    `${app.name}-${app.coolify_app_uuid}`;
-  } catch (e) {
-    return bad(res, 502, `coolify: ${e.message}`, "coolify_error");
-  }
-
-  // cAdvisor labels: `name` is the container name (may have a leading "/"
-  // depending on the build). Match by regex.
-  const containerRe = `/?${containerName.replace(/[.+*?^$()[\]{}|\\]/g, "\\\\$&")}.*`;
-  const sel = `slug="${slug}",kind="cadvisor",name=~"${containerRe}"`;
+  // Coolify names application containers `<coolify_app_uuid>-<deployment_id>`.
+  // Match by the uuid prefix so we pick up the current container regardless of
+  // which deployment id it ended up with. (The Coolify API doesn't reliably
+  // return a container_name field, so the old `${name}-${uuid}` fallback was
+  // wrong — that wasn't the actual docker container name.)
+  const uuidEscaped = app.coolify_app_uuid.replace(/[.+*?^$()[\]{}|\\]/g, "\\$&");
+  const containerName = app.coolify_app_uuid;
+  const sel = `slug="${slug}",kind="cadvisor",name=~"^${uuidEscaped}(-.*)?$"`;
 
   const queries = {
     cpu:     `sum(rate(container_cpu_usage_seconds_total{${sel}}[5m])) * 100`,

@@ -46,8 +46,13 @@ if ! docker ps --format '{{.Names}}' | grep -q '^node-exporter\$'; then
     --path.rootfs=/host
 fi
 
-# 3. cAdvisor (port 8083, 8080-8082 collide with coolify-proxy)
-if ! docker ps --format '{{.Names}}' | grep -q '^cadvisor\$'; then
+# 3. cAdvisor (port 8083; 8080-8082 collide with coolify-proxy).
+# v0.55+ required: earlier versions break on Docker 28's "overlayfs"
+# storage driver and emit zero per-container metrics. Recreate the
+# container if a wrong (older) image is currently used.
+CADVISOR_IMAGE="gcr.io/cadvisor/cadvisor:v0.55.1"
+CURRENT_IMG=\$(docker inspect cadvisor --format '{{.Config.Image}}' 2>/dev/null || true)
+if [[ -z "\$CURRENT_IMG" || "\$CURRENT_IMG" != "\$CADVISOR_IMAGE" ]]; then
   docker rm -f cadvisor 2>/dev/null || true
   docker run -d --name cadvisor --restart=unless-stopped \\
     -p 8083:8080 \\
@@ -57,7 +62,7 @@ if ! docker ps --format '{{.Names}}' | grep -q '^cadvisor\$'; then
     --volume=/var/lib/docker/:/var/lib/docker:ro \\
     --volume=/dev/disk/:/dev/disk:ro \\
     --privileged --device=/dev/kmsg \\
-    gcr.io/cadvisor/cadvisor:v0.49.1
+    "\$CADVISOR_IMAGE"
 fi
 REMOTE
 
