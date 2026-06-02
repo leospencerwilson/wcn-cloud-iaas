@@ -671,18 +671,55 @@ const server = http.createServer(async (req, res) => {
     } catch (e) { return json(res, e.status || 500, { error: e.message }); }
   }
 
-  // — Supabase admin: auth users, storage, policies, realtime, functions —
+  // — Supabase admin: lists (GET) and mutations on collection paths —
   const sbM = /^\/vms\/([a-z0-9][a-z0-9-]{1,38}[a-z0-9])\/supabase\/(auth\/users|storage\/buckets|storage\/objects|policies|realtime|functions)$/.exec(u.pathname);
-  if (sbM && req.method === "GET") {
+  if (sbM) {
     const vSlug = sbM[1];
     const path = sbM[2];
     try {
-      if (path === "auth/users")       return await supabaseAdmin.authUsers(req, res, { slug: vSlug, query });
-      if (path === "storage/buckets")  return await supabaseAdmin.storageBuckets(req, res, { slug: vSlug });
-      if (path === "storage/objects")  return await supabaseAdmin.storageObjects(req, res, { slug: vSlug, query });
-      if (path === "policies")         return await supabaseAdmin.policies(req, res, { slug: vSlug });
-      if (path === "realtime")         return await supabaseAdmin.realtime(req, res, { slug: vSlug });
-      if (path === "functions")        return await supabaseAdmin.functions(req, res, { slug: vSlug });
+      if (req.method === "GET") {
+        if (path === "auth/users")       return await supabaseAdmin.authUsers(req, res, { slug: vSlug, query });
+        if (path === "storage/buckets")  return await supabaseAdmin.storageBuckets(req, res, { slug: vSlug });
+        if (path === "storage/objects")  return await supabaseAdmin.storageObjects(req, res, { slug: vSlug, query });
+        if (path === "policies")         return await supabaseAdmin.policies(req, res, { slug: vSlug });
+        if (path === "realtime")         return await supabaseAdmin.realtime(req, res, { slug: vSlug });
+        if (path === "functions")        return await supabaseAdmin.functions(req, res, { slug: vSlug });
+      }
+      if (req.method === "POST") {
+        const body = await readBodyOr(req);
+        if (path === "auth/users")      return await supabaseAdmin.authCreateUser(req, res, { slug: vSlug, body });
+        if (path === "storage/buckets") return await supabaseAdmin.storageCreateBucket(req, res, { slug: vSlug, body });
+        if (path === "policies")        return await supabaseAdmin.policyCreate(req, res, { slug: vSlug, body });
+      }
+      if (req.method === "DELETE") {
+        if (path === "storage/objects") return await supabaseAdmin.storageDeleteObject(req, res, { slug: vSlug, query });
+        if (path === "policies")        return await supabaseAdmin.policyDelete(req, res, { slug: vSlug, query });
+      }
+    } catch (e) { return json(res, e.status || 500, { error: e.message }); }
+  }
+
+  // — Supabase admin: per-resource paths (auth user id, bucket name) —
+  const sbU = /^\/vms\/([a-z0-9][a-z0-9-]{1,38}[a-z0-9])\/supabase\/auth\/users\/([0-9a-f-]{36})$/.exec(u.pathname);
+  if (sbU) {
+    const vSlug = sbU[1];
+    const params = { id: sbU[2] };
+    try {
+      if (req.method === "PATCH" || req.method === "PUT") {
+        const body = await readBodyOr(req);
+        return await supabaseAdmin.authUpdateUser(req, res, { slug: vSlug, params, body });
+      }
+      if (req.method === "DELETE") {
+        return await supabaseAdmin.authDeleteUser(req, res, { slug: vSlug, params });
+      }
+    } catch (e) { return json(res, e.status || 500, { error: e.message }); }
+  }
+
+  const sbB = /^\/vms\/([a-z0-9][a-z0-9-]{1,38}[a-z0-9])\/supabase\/storage\/buckets\/([a-z0-9][a-z0-9._-]{0,62})$/.exec(u.pathname);
+  if (sbB && req.method === "DELETE") {
+    const vSlug = sbB[1];
+    const params = { name: sbB[2] };
+    try {
+      return await supabaseAdmin.storageDeleteBucket(req, res, { slug: vSlug, params });
     } catch (e) { return json(res, e.status || 500, { error: e.message }); }
   }
 
