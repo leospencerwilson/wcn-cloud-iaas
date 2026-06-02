@@ -387,9 +387,23 @@ async function streamDeployLog(req, res, { slug, params }) {
   const hb = setInterval(() => { if (!closed) res.write(": ping\n\n"); }, 15000);
   try {
     while (!closed) {
+      // Coolify v4 omits `logs` from the single-deployment endpoint
+      // (`/deployments/{uuid}` returns metadata only — status, dates,
+      // commit, etc. but logs:null). The application's deployments list
+      // (`/deployments/applications/{app_uuid}`) DOES include the
+      // stringified-JSON `logs` field for each deployment, so we fetch
+      // the list and pick out our target by uuid.
       let dep;
       try {
-        dep = await cf.get(`/deployments/${params.deployment_id}`);
+        const list = await cf.get(`/deployments/applications/${app.coolify_app_uuid}`);
+        const arr = (list && (list.deployments || list)) || [];
+        dep = Array.isArray(arr)
+          ? arr.find((d) => d && d.deployment_uuid === params.deployment_id)
+          : null;
+        if (!dep) {
+          sseSend(res, "error", { message: `deployment ${params.deployment_id} not found` });
+          break;
+        }
       } catch (e) {
         sseSend(res, "error", { message: e.message });
         break;
