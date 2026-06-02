@@ -379,7 +379,10 @@ async function streamDeployLog(req, res, { slug, params }) {
   const cf = await coolify.forSlug(slug);
   sseHeaders(res);
   let closed = false;
-  let sentLen = 0;
+  // Coolify v4 stores deployment logs as a JSON-stringified array of
+  //   { command, output, type: "stdout"|"stderr", timestamp, hidden, batch }
+  // Track how many ENTRIES we've already emitted so we only send new ones.
+  let sentCount = 0;
   req.on("close", () => { closed = true; });
   const hb = setInterval(() => { if (!closed) res.write(": ping\n\n"); }, 15000);
   try {
@@ -391,14 +394,30 @@ async function streamDeployLog(req, res, { slug, params }) {
         sseSend(res, "error", { message: e.message });
         break;
       }
-      const logs = (dep && (dep.logs || dep.output)) || "";
-      if (logs.length > sentLen) {
-        const chunk = logs.slice(sentLen);
-        for (const line of chunk.split(/\r?\n/)) {
-          if (line) sseSend(res, "log", line);
-        }
-        sentLen = logs.length;
+
+      let entries = [];
+      const raw = dep && (dep.logs || dep.output);
+      if (typeof raw === "string" && raw.trim().startsWith("[")) {
+        try {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) entries = parsed;
+        } catch { /* malformed; fall through */ }
+      } else if (typeof raw === "string" && raw.length > 0) {
+        // Older Coolify versions returned plain text — keep that path
+        // working by treating each line as one entry.
+        entries = raw.split(/\r?\n/).map((line) => ({ output: line }));
       }
+
+      for (let i = sentCount; i < entries.length; i++) {
+        const e = entries[i] || {};
+        if (e.hidden) continue;
+        const out = String(e.output ?? "").replace(/\r/g, "");
+        for (const line of out.split("\n")) {
+          if (line && !closed) sseSend(res, "log", line);
+        }
+      }
+      sentCount = entries.length;
+
       const st = dep && dep.status;
       if (["finished", "failed", "error", "cancelled"].includes(st)) {
         sseSend(res, "done", { status: st });
