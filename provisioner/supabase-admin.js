@@ -146,7 +146,7 @@ async function storageBuckets(req, res, { slug }) {
   const sql = `SELECT coalesce(json_agg(row_to_json(b) ORDER BY b.created_at), '[]'::json) FROM (
     SELECT id, name, public, file_size_limit, allowed_mime_types, created_at, updated_at,
            (SELECT count(*) FROM storage.objects WHERE bucket_id = b.id) AS object_count,
-           (SELECT coalesce(sum(metadata->>'size')::bigint, 0) FROM storage.objects WHERE bucket_id = b.id) AS total_bytes
+           coalesce((SELECT sum((metadata->>'size')::bigint) FROM storage.objects WHERE bucket_id = b.id), 0) AS total_bytes
     FROM storage.buckets b
   ) b;`;
   try {
@@ -191,7 +191,7 @@ async function storageObjects(req, res, { slug, query }) {
 async function policies(req, res, { slug }) {
   const vm = await vmBySlug(slug);
   if (!vm) return bad(res, 404, "vm not found", "not_found");
-  const sql = `SELECT coalesce(json_agg(row_to_json(p) ORDER BY p.schemaname, p.tablename, p.policyname), '[]'::json) FROM (
+  const sql = `SELECT coalesce(json_agg(row_to_json(p) ORDER BY p.schemaname, p.tablename, p.name), '[]'::json) FROM (
     SELECT schemaname, tablename, policyname AS name, permissive, roles, cmd, qual, with_check
     FROM pg_policies
     WHERE schemaname NOT IN ('pg_catalog','information_schema')
@@ -242,15 +242,20 @@ async function functions(req, res, { slug }) {
   // depends on the deploy layout. As a first pass we report what the DB
   // knows — supabase_functions schema (if present) — and let follow-up
   // commits read the filesystem when we add deploy/upload.
-  const sql = `SELECT coalesce(json_agg(row_to_json(f)), '[]'::json) FROM (
-    SELECT n.nspname AS schema, c.relname AS name
-    FROM pg_class c
-    JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE n.nspname = 'supabase_functions'
-  ) f;`;
+  // Edge Functions in OSS Supabase live on disk in the edge-runtime
+  // container's volume (one folder per function), not in the database.
+  // There's no fully-reliable way to enumerate them from SQL — the
+  // supabase_functions schema only holds Coolify's internal hooks/
+  // migrations metadata, which we deliberately exclude here. Until we
+  // add a filesystem-listing endpoint, return empty and let the UI
+  // point the user at Studio for deploys.
+  void slug;
+  void vm;
   try {
-    const list = await runJson(vm.ip, sql);
-    json(res, 200, { functions: list, runtime_note: "Edge functions deploy via Coolify volumes; this listing reflects supabase_functions schema only." });
+    json(res, 200, {
+      functions: [],
+      runtime_note: "Edge Functions are stored on the customer VM's edge-runtime volume, not in the database. Deploy via the Supabase CLI or the embedded Studio; runtime listing endpoint coming in a follow-up.",
+    });
   } catch (e) {
     bad(res, e.status || 500, e.message, "psql_error");
   }
