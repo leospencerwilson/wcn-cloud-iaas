@@ -379,7 +379,7 @@ const server = http.createServer(async (req, res) => {
       if (action === "metrics"     && req.method === "GET")  return await metrics.appMetrics(req, res, { slug, params, query });
       if (action === "deployments" && req.method === "GET")  return await apps.deployments(req, res, { slug, params });
       if (action === "logs"        && req.method === "GET")  {
-        if (query.follow === "true") return await apps.streamRuntimeLogs(req, res, { slug, params, query });
+        if ((query.follow === "true" || query.follow === "1")) return await apps.streamRuntimeLogs(req, res, { slug, params, query });
         return await apps.logs(req, res, { slug, params, query });
       }
       if (action === "env"         && req.method === "GET")  return await apps.envGet(req, res,      { slug, params });
