@@ -34,6 +34,7 @@ const tokens = require("./tokens");
 const bulk = require("./bulk");
 const webhooks = require("./webhooks");
 const dbquery = require("./dbquery");
+const supabaseAdmin = require("./supabase-admin");
 const tabviews = require("./tabviews");
 process.on("unhandledRejection", (err) => {
   console.error("[unhandledRejection]", err && err.stack ? err.stack : err);
@@ -657,7 +658,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   // — #17: Embedded DB GUI —
-  const dbM = /^\/vms\/([a-z0-9][a-z0-9-]{1,38}[a-z0-9])\/db\/(query|tables|columns|sizes)$/.exec(u.pathname);
+  const dbM = /^\/vms\/([a-z0-9][a-z0-9-]{1,38}[a-z0-9])\/db\/(query|tables|columns|sizes|rows)$/.exec(u.pathname);
   if (dbM) {
     const vSlug = dbM[1];
     const action = dbM[2];
@@ -666,6 +667,22 @@ const server = http.createServer(async (req, res) => {
       if (action === "tables"  && req.method === "GET")  return await dbquery.tables(req, res,  { slug: vSlug });
       if (action === "columns" && req.method === "GET")  return await dbquery.columns(req, res, { slug: vSlug, query });
       if (action === "sizes"   && req.method === "GET")  return await dbquery.sizes(req, res,   { slug: vSlug });
+      if (action === "rows"    && req.method === "GET")  return await supabaseAdmin.rows(req, res, { slug: vSlug, query });
+    } catch (e) { return json(res, e.status || 500, { error: e.message }); }
+  }
+
+  // — Supabase admin: auth users, storage, policies, realtime, functions —
+  const sbM = /^\/vms\/([a-z0-9][a-z0-9-]{1,38}[a-z0-9])\/supabase\/(auth\/users|storage\/buckets|storage\/objects|policies|realtime|functions)$/.exec(u.pathname);
+  if (sbM && req.method === "GET") {
+    const vSlug = sbM[1];
+    const path = sbM[2];
+    try {
+      if (path === "auth/users")       return await supabaseAdmin.authUsers(req, res, { slug: vSlug, query });
+      if (path === "storage/buckets")  return await supabaseAdmin.storageBuckets(req, res, { slug: vSlug });
+      if (path === "storage/objects")  return await supabaseAdmin.storageObjects(req, res, { slug: vSlug, query });
+      if (path === "policies")         return await supabaseAdmin.policies(req, res, { slug: vSlug });
+      if (path === "realtime")         return await supabaseAdmin.realtime(req, res, { slug: vSlug });
+      if (path === "functions")        return await supabaseAdmin.functions(req, res, { slug: vSlug });
     } catch (e) { return json(res, e.status || 500, { error: e.message }); }
   }
 
