@@ -100,12 +100,16 @@ fi
 # Per the subdomain-per-service pivot (03dc5ae) each customer gets 4 records,
 # all CNAME'd to the same cloudflared tunnel hostname. Caddy on the VM
 # dispatches by Host header to the right upstream.
-info "[4/9] Creating DNS records (apex + 3 service subdomains)..."
+info "[4/9] Creating DNS records (apex + 3 service subdomains + per-app wildcard)..."
+# `*.SLUG.*` catches per-app subdomains (e.g. microtik.SLUG.*) issued
+# at app creation time. Requires Total TLS enabled on the zone for the
+# 2-level wildcard cert (free, dashboard toggle, one-time).
 for record_name in \
   "${SLUG}.western-communication.com" \
   "admin-${SLUG}.western-communication.com" \
   "db-${SLUG}.western-communication.com" \
-  "api-${SLUG}.western-communication.com"; do
+  "api-${SLUG}.western-communication.com" \
+  "*.${SLUG}.western-communication.com"; do
   existing_dns=$(cf_api GET "/zones/${CF_ZONE_ID}/dns_records?name=${record_name}" \
     | jq -r '.result[0].id // empty')
   if [[ -n "$existing_dns" ]]; then

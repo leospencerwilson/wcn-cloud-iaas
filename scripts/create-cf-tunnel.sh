@@ -43,22 +43,26 @@ chmod 600 "$cred_path"
 
 ok "Tunnel ${tunnel_id} created, credentials at ${cred_path}"
 
-# Configure ingress. The subdomain-per-service architecture puts admin-,
-# db-, and api- single-level subdomains alongside the apex SLUG.* so each
-# is covered by Universal SSL's *.western-communication.com wildcard.
-# Caddy on the VM dispatches by Host header. 4 explicit hostnames (no
-# wildcard) because cloudflared hostname-matchers are per-label and
-# `*-suffix` patterns aren't supported.
+# Configure ingress. The dashed-prefix subdomains (admin-, db-, api-) sit
+# at a single label deep so they're covered by Cloudflare Universal SSL on
+# *.western-communication.com. The wildcard hostname `*.SLUG.*` catches
+# per-app subdomains (e.g. microtik.testingcustomer.*) which are two
+# labels deep — those rely on Cloudflare Total TLS for cert issuance, so
+# Total TLS must be enabled on the zone (one-time, free, dashboard
+# toggle). cloudflared supports `*.HOSTNAME` wildcards in ingress as of
+# 2023.
 config_body=$(jq -nc \
-  --arg apex_host  "${slug}.western-communication.com" \
-  --arg admin_host "admin-${slug}.western-communication.com" \
-  --arg db_host    "db-${slug}.western-communication.com" \
-  --arg api_host   "api-${slug}.western-communication.com" \
+  --arg apex_host     "${slug}.western-communication.com" \
+  --arg admin_host    "admin-${slug}.western-communication.com" \
+  --arg db_host       "db-${slug}.western-communication.com" \
+  --arg api_host      "api-${slug}.western-communication.com" \
+  --arg wildcard_host "*.${slug}.western-communication.com" \
   '{config: {ingress: [
-    {hostname: $apex_host,  service: "http://localhost:80"},
-    {hostname: $admin_host, service: "http://localhost:80"},
-    {hostname: $db_host,    service: "http://localhost:80"},
-    {hostname: $api_host,   service: "http://localhost:80"},
+    {hostname: $apex_host,     service: "http://localhost:80"},
+    {hostname: $admin_host,    service: "http://localhost:80"},
+    {hostname: $db_host,       service: "http://localhost:80"},
+    {hostname: $api_host,      service: "http://localhost:80"},
+    {hostname: $wildcard_host, service: "http://localhost:80"},
     {service: "http_status:404"}
   ]}}')
 

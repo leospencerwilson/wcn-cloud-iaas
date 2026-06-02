@@ -154,6 +154,27 @@ http://${API_HOSTNAME} {
 CADDY
 fi
 
+# ── Per-app subdomain catch-all (Coolify-deployed apps) ──────────────
+# Each Coolify-deployed app gets FQDN <app-name>.${SLUG}.western-* set
+# at creation time (see provisioner/apps.js). Caddy hands the request to
+# coolify-proxy on 8081; Traefik dispatches by Host header to the right
+# container via its docker-provider labels. Requires Cloudflare Total TLS
+# enabled on the zone for the 2-level-deep cert (free, dashboard toggle).
+cat <<CADDY
+
+# ── Per-app subdomains → Coolify-proxy (Traefik dispatches by Host) ──
+http://*.${SLUG}.western-communication.com {
+    encode gzip
+    handle {
+        reverse_proxy http://127.0.0.1:8081
+    }
+    log {
+        output file /var/log/caddy/access.log
+        format json
+    }
+}
+CADDY
+
 # Per-domain blocks for any custom hostnames the customer's added.
 for d in "${extra_domains[@]}"; do
   cat <<CADDY

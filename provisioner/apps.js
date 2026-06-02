@@ -24,7 +24,18 @@ async function appBySlugAndId(slug, id) {
   `, [slug, id]);
 }
 
-async function createCoolifyApp(cf, app) {
+// FQDN for a Coolify app: <app-name>.<customer-slug>.western-communication.com.
+// Set at creation time because Coolify bakes the FQDN into the on-disk
+// docker-compose.yaml on first deploy and changing it later doesn't
+// reliably propagate (Coolify preserves the cached compose). The
+// wildcard ingress on the customer tunnel + Caddy block + Cloudflare
+// Total TLS handle the cert + routing layer.
+const ROOT_DOMAIN = process.env.ROOT_DOMAIN || "western-communication.com";
+function fqdnForApp(slug, app_name) {
+  return `http://${app_name}.${slug}.${ROOT_DOMAIN}`;
+}
+
+async function createCoolifyApp(cf, app, slug) {
   const projects = await cf.get("/projects");
   if (!Array.isArray(projects) || projects.length === 0) {
     throw Object.assign(new Error("no project in Coolify; service-account bootstrap incomplete"), { status: 500 });
@@ -43,6 +54,8 @@ async function createCoolifyApp(cf, app) {
   }
   const environment_name = envs[0].name;
 
+  const domains = fqdnForApp(slug, app.name);
+
   if (app.source_type === "git") {
     return cf.post("/applications/public", {
       project_uuid,
@@ -53,6 +66,7 @@ async function createCoolifyApp(cf, app) {
       build_pack:     app.build_pack || "nixpacks",
       name:           app.name,
       ports_exposes:  "3000",
+      domains,
       instant_deploy: false,
     });
   }
@@ -64,6 +78,7 @@ async function createCoolifyApp(cf, app) {
       docker_registry_image_name: app.docker_image,
       name:                       app.name,
       ports_exposes:              "3000",
+      domains,
       instant_deploy:             false,
     });
   }
@@ -76,6 +91,7 @@ async function createCoolifyApp(cf, app) {
       git_branch:     app.source_branch,
       name:           app.name,
       ports_exposes:  "3000",
+      domains,
       instant_deploy: false,
     });
   }
@@ -111,7 +127,7 @@ async function create(req, res, { slug, body }) {
   let cfErr = null;
   try {
     const cf = await coolify.forSlug(slug);
-    cfApp = await createCoolifyApp(cf, inserted);
+    cfApp = await createCoolifyApp(cf, inserted, slug);
   } catch (e) {
     cfErr = e;
   }
