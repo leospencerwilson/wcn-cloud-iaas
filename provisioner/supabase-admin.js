@@ -82,14 +82,11 @@ async function kongCall(slug, path, { method = "GET", body, extraHeaders = {} } 
   if (!SLUG_RE.test(slug)) throw Object.assign(new Error("invalid slug"), { status: 400 });
   const key = await getServiceRoleKey(slug);
   const url = `https://api-${slug}.${ROOT_DOMAIN}${path}`;
+  const headers = { apikey: key, authorization: `Bearer ${key}`, ...extraHeaders };
+  if (body) headers["content-type"] = "application/json";
   const res = await fetch(url, {
     method,
-    headers: {
-      apikey: key,
-      authorization: `Bearer ${key}`,
-      "content-type": body ? "application/json" : undefined,
-      ...extraHeaders,
-    },
+    headers,
     body: body ? JSON.stringify(body) : undefined,
   });
   const text = await res.text();
