@@ -434,6 +434,15 @@ async function streamDeployLog(req, res, { slug, params }) {
 
       const st = dep && dep.status;
       if (["finished", "failed", "error", "cancelled"].includes(st)) {
+        const nextStatus = st === "finished" ? "running"
+          : (st === "failed" || st === "error") ? "failed"
+          : "stopped";
+        try {
+          await db.exec(
+            "UPDATE apps SET status = $2, last_deploy_status = $3, updated_at = now() WHERE id = $1",
+            [app.id, nextStatus, st],
+          );
+        } catch (e) { console.error("[apps] post-deploy status update failed:", e.message); }
         sseSend(res, "done", { status: st });
         break;
       }
