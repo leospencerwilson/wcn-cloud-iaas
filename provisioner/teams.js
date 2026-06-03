@@ -25,12 +25,44 @@ async function audit(req, action, slug, details = "") {
 }
 
 // GET /customers/{slug}/team
+//
+// Returns team rows from customer_users PLUS the customer's primary admin(s)
+// that live in app_users (created during onboarding, never invited). Without
+// the UNION, the founding admin never appears in the team tab — which is
+// confusing because they obviously ARE a member.
+//
+// Primary admins are flagged with source="primary"; the console disables
+// role-change + revoke for them (the WCN-side flow owns those mutations).
+// Negative synthetic IDs prevent collision with real customer_users IDs.
 async function list(req, res, { slug }) {
   const rows = await db.rowsJson(
     `SELECT row_to_json(t) FROM (
        SELECT id, user_email, role, invited_by, invited_at, accepted_at, revoked_at,
-              invite_token IS NOT NULL AND accepted_at IS NULL AND revoked_at IS NULL AS pending_invite
-       FROM customer_users WHERE customer_slug = $1 ORDER BY invited_at DESC
+              (invite_token IS NOT NULL AND accepted_at IS NULL AND revoked_at IS NULL) AS pending_invite,
+              'team'::text AS source
+       FROM customer_users WHERE customer_slug = $1
+
+       UNION ALL
+
+       SELECT
+         (- (row_number() OVER (ORDER BY au.created_at)))::bigint AS id,
+         au.email AS user_email,
+         'owner'::text AS role,
+         NULL::text AS invited_by,
+         au.created_at AS invited_at,
+         au.created_at AS accepted_at,
+         CASE WHEN au.status = 'active' THEN NULL ELSE au.created_at END AS revoked_at,
+         false AS pending_invite,
+         'primary'::text AS source
+       FROM app_users au
+       WHERE au.customer_slug = $1
+         AND au.role = 'customer_admin'
+         AND NOT EXISTS (
+           SELECT 1 FROM customer_users cu
+           WHERE cu.customer_slug = $1 AND lower(cu.user_email) = lower(au.email)
+         )
+
+       ORDER BY invited_at DESC
      ) t`,
     [slug],
   );
