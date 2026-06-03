@@ -31,6 +31,7 @@ const certs = require("./certs");
 const capacity = require("./capacity");
 const teams = require("./teams");
 const tokens = require("./tokens");
+const migrate = require("./migrate");
 const bulk = require("./bulk");
 const webhooks = require("./webhooks");
 const dbquery = require("./dbquery");
@@ -756,6 +757,32 @@ const server = http.createServer(async (req, res) => {
   if (fnSrc && req.method === "GET") {
     try {
       return await supabaseAdmin.functionSource(req, res, { slug: fnSrc[1], params: { name: fnSrc[2] } });
+    } catch (e) { return json(res, e.status || 500, { error: e.message }); }
+  }
+
+  // — Migration Wizard —
+  const migInv = /^\/vms\/([a-z0-9][a-z0-9-]{1,38}[a-z0-9])\/migrate\/inventory$/.exec(u.pathname);
+  if (migInv && req.method === "POST") {
+    try {
+      return await migrate.inventory(req, res, { slug: migInv[1], body: await readBodyOr(req) });
+    } catch (e) { return json(res, e.status || 500, { error: e.message }); }
+  }
+  const migRun = /^\/vms\/([a-z0-9][a-z0-9-]{1,38}[a-z0-9])\/migrate\/run$/.exec(u.pathname);
+  if (migRun && req.method === "POST") {
+    try {
+      return await migrate.runStart(req, res, { slug: migRun[1], body: await readBodyOr(req) });
+    } catch (e) { return json(res, e.status || 500, { error: e.message }); }
+  }
+  const migStream = /^\/vms\/([a-z0-9][a-z0-9-]{1,38}[a-z0-9])\/migrate\/stream\/([0-9a-f-]{36})$/.exec(u.pathname);
+  if (migStream && req.method === "GET") {
+    try {
+      return migrate.stream(req, res, { slug: migStream[1], params: { job_id: migStream[2] } });
+    } catch (e) { return json(res, e.status || 500, { error: e.message }); }
+  }
+  const migCancel = /^\/vms\/([a-z0-9][a-z0-9-]{1,38}[a-z0-9])\/migrate\/cancel\/([0-9a-f-]{36})$/.exec(u.pathname);
+  if (migCancel && req.method === "POST") {
+    try {
+      return migrate.cancel(req, res, { slug: migCancel[1], params: { job_id: migCancel[2] } });
     } catch (e) { return json(res, e.status || 500, { error: e.message }); }
   }
 
