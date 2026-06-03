@@ -11,7 +11,8 @@ require_env OPS_DB_URL B2_KEY_ID B2_APP_KEY
 require_cmd rclone psql ssh docker
 
 ONLY_SLUG=""
-[[ "${1:-}" == "--slug" ]] && ONLY_SLUG="${2:?slug arg required}"
+ONLY_SLUG_SET=false
+[[ "${1:-}" == "--slug" ]] && { ONLY_SLUG="${2:?slug arg required}"; ONLY_SLUG_SET=true; }
 
 ts=$(date -u +%Y%m%dT%H%M%SZ)
 WORK=$(mktemp -d -p /tmp wcn-backup-XXXXXX)
@@ -42,6 +43,9 @@ backup_one() {
   fi
   echo "OK   $(date -u +%FT%TZ) $label size=${size}" >>"$success_log"
   ok "  $label uploaded to b2:wcn-cloud-backups/${prefix}/"
+  # Structured marker — vms.js createBackup parses this to populate
+  # size_bytes + b2_key on the backups row after the run completes.
+  echo "WCN_BACKUP_RESULT label=${label} prefix=${prefix} size=${size} key=${prefix}/$(basename "$file")"
 }
 
 # ── 1. ops DB ──────────────────────────────────────────────────────────
@@ -66,7 +70,7 @@ while IFS='|' read -r slug ip; do
 done < <(ops_db -c "
   SELECT c.slug, v.ip
   FROM customers c JOIN vms v ON v.customer_slug = c.slug
-  WHERE c.status='active' AND c.tier IN ('site-db','pro') AND v.status='active' $slug_filter
+  WHERE c.status='active' AND c.tier IN ('site-db','pro') AND ($([ "$ONLY_SLUG_SET" = true ] && echo 1=1 || echo "v.status='active'")) $slug_filter
   ORDER BY c.slug")
 
 # ── 3. retention via B2 lifecycle (set up once, see ops-db-schema.sql comments) ──

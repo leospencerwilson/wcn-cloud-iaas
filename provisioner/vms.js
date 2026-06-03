@@ -192,11 +192,28 @@ async function createBackup(req, res, { slug, jobs, randomUUID }) {
     job.finishedAt = new Date().toISOString();
     stream.end(`\n── exit ${code} at ${job.finishedAt}\n`);
     job.proc = null;
+    let parsedSize = null, parsedKey = null;
+    try {
+      const logText = fs.readFileSync(logPath, "utf8");
+      // Look for the LAST customer-* WCN_BACKUP_RESULT line (the script
+      // emits one per customer; --slug runs produce exactly one).
+      const lines = logText.split(/\r?\n/).reverse();
+      for (const line of lines) {
+        const m = /WCN_BACKUP_RESULT\b.*\blabel=customer-[^\s]+\s.*\bsize=(\d+)\s.*\bkey=(\S+)/.exec(line);
+        if (m) {
+          parsedSize = parseInt(m[1], 10);
+          parsedKey = m[2];
+          break;
+        }
+      }
+    } catch (e) {
+      console.error("[vms] backup log parse failed:", e.message);
+    }
     try {
       await db.exec(
-        `INSERT INTO backups (customer_slug, started_at, finished_at, status, log_path)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [slug, job.startedAt, job.finishedAt, job.status, logPath],
+        `INSERT INTO backups (customer_slug, started_at, finished_at, status, log_path, size_bytes, b2_key)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [slug, job.startedAt, job.finishedAt, job.status, logPath, parsedSize, parsedKey],
       );
     } catch (e) {
       console.error("[vms] backup row insert failed:", e.message);
