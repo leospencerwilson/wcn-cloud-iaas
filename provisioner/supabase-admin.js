@@ -196,23 +196,24 @@ ${eof}
   });
 }
 
-/* ── /vms/{slug}/db/rows?schema=&table=&limit=&offset= ─────────────── */
+/* ── /vms/{slug}/db/rows?table=&limit=&offset= ─────────────────────── */
+/* Locked to the public schema. */
 async function rows(req, res, { slug, query }) {
   const vm = await vmBySlug(slug);
   if (!vm) return bad(res, 404, "vm not found", "not_found");
-  const schema = String(query.schema || "public");
+  const schema = "public";
   const table = String(query.table || "");
-  if (!IDENT.test(schema) || !IDENT.test(table)) {
-    return bad(res, 400, "invalid schema or table", "invalid_ident");
+  if (!IDENT.test(table)) {
+    return bad(res, 400, "invalid table", "invalid_ident");
   }
   const limit = Math.min(parseInt(query.limit || "50", 10) || 50, 500);
   const offset = Math.max(parseInt(query.offset || "0", 10) || 0, 0);
 
   const sql = `SELECT json_build_object(
     'rows', coalesce((SELECT json_agg(row_to_json(r)) FROM (
-      SELECT * FROM ${schema}.${table} LIMIT ${limit} OFFSET ${offset}
+      SELECT * FROM "${schema}"."${table}" LIMIT ${limit} OFFSET ${offset}
     ) r), '[]'::json),
-    'total', (SELECT reltuples::bigint FROM pg_class WHERE oid = '${schema}.${table}'::regclass)
+    'total', (SELECT count(*) FROM "${schema}"."${table}")
   );`;
   try {
     const data = await runJson(vm.ip, sql);
@@ -301,10 +302,10 @@ async function storageObjects(req, res, { slug, query }) {
 async function policies(req, res, { slug }) {
   const vm = await vmBySlug(slug);
   if (!vm) return bad(res, 404, "vm not found", "not_found");
-  const sql = `SELECT coalesce(json_agg(row_to_json(p) ORDER BY p.schemaname, p.tablename, p.name), '[]'::json) FROM (
+  const sql = `SELECT coalesce(json_agg(row_to_json(p) ORDER BY p.tablename, p.name), '[]'::json) FROM (
     SELECT schemaname, tablename, policyname AS name, permissive, roles, cmd, qual, with_check
     FROM pg_policies
-    WHERE schemaname NOT IN ('pg_catalog','information_schema')
+    WHERE schemaname = 'public'
   ) p;`;
   try {
     json(res, 200, await runJson(vm.ip, sql));
@@ -493,11 +494,12 @@ async function storageDeleteObject(req, res, { slug, query }) {
 async function policyCreate(req, res, { slug, body }) {
   const vm = await vmBySlug(slug);
   if (!vm) return bad(res, 404, "vm not found", "not_found");
-  const schema = String(body.schema || "");
+  // Locked to public schema regardless of what the body sends.
+  const schema = "public";
   const table = String(body.table || "");
   const name = String(body.name || "");
-  if (!IDENT.test(schema) || !IDENT.test(table) || !IDENT.test(name)) {
-    return bad(res, 400, "schema, table, name must match [A-Za-z_][A-Za-z0-9_]{0,62}", "invalid_ident");
+  if (!IDENT.test(table) || !IDENT.test(name)) {
+    return bad(res, 400, "table and name must match [A-Za-z_][A-Za-z0-9_]{0,62}", "invalid_ident");
   }
   const cmd = String(body.cmd || "ALL").toUpperCase();
   if (!["SELECT","INSERT","UPDATE","DELETE","ALL"].includes(cmd)) {
@@ -528,15 +530,15 @@ async function policyCreate(req, res, { slug, body }) {
   }
 }
 
-/* DELETE /vms/{slug}/supabase/policies?schema=&table=&name= */
+/* DELETE /vms/{slug}/supabase/policies?table=&name= (schema locked to public) */
 async function policyDelete(req, res, { slug, query }) {
   const vm = await vmBySlug(slug);
   if (!vm) return bad(res, 404, "vm not found", "not_found");
-  const schema = String(query.schema || "");
+  const schema = "public";
   const table = String(query.table || "");
   const name = String(query.name || "");
-  if (!IDENT.test(schema) || !IDENT.test(table) || !IDENT.test(name)) {
-    return bad(res, 400, "schema, table, name must match identifier rules", "invalid_ident");
+  if (!IDENT.test(table) || !IDENT.test(name)) {
+    return bad(res, 400, "table and name must match identifier rules", "invalid_ident");
   }
   const sql = `DROP POLICY IF EXISTS "${name}" ON "${schema}"."${table}";`;
   try {
@@ -544,6 +546,569 @@ async function policyDelete(req, res, { slug, query }) {
     json(res, 200, { ok: true });
   } catch (e) {
     bad(res, e.status || 400, e.message, "sql_error");
+  }
+}
+
+/* ── Table Editor: CREATE TABLE / ALTER TABLE / INSERT / UPDATE / DELETE ──
+ * Public-schema only. Identifiers (table/column names) are strictly
+ * validated, then double-quoted in SQL so reserved words work. Values
+ * for INSERT/UPDATE go through Postgres's jsonb_populate_record so the
+ * DB itself does the type casting — we never hand-encode numerics /
+ * booleans / JSON / dates.
+ */
+
+// Whitelist of accepted PG type strings for column creation. Includes
+// the canonical names + the parametric variants (varchar(n) etc.). Add
+// to this as needed.
+const TYPE_RE = /^(int2|int4|int8|smallint|integer|bigint|float4|float8|real|double precision|numeric(\([0-9]+(,[0-9]+)?\))?|decimal(\([0-9]+(,[0-9]+)?\))?|money|text|varchar(\([0-9]+\))?|character varying(\([0-9]+\))?|char(\([0-9]+\))?|character(\([0-9]+\))?|citext|bool|boolean|uuid|date|time(\([0-9]+\))?|timetz|timestamp(\([0-9]+\))?|timestamptz|interval|json|jsonb|bytea|inet|cidr|macaddr|tsvector|tsquery)(\[\])?$/i;
+
+const FK_ACTION = new Set(["NO ACTION", "RESTRICT", "CASCADE", "SET NULL", "SET DEFAULT"]);
+
+function assertIdent(s, label) {
+  if (!IDENT.test(String(s))) {
+    const e = new Error(`invalid ${label}: must match [A-Za-z_][A-Za-z0-9_]{0,62}`);
+    e.status = 400;
+    throw e;
+  }
+}
+
+function assertType(t) {
+  if (!TYPE_RE.test(String(t))) {
+    const e = new Error(`unsupported type: ${t}`);
+    e.status = 400;
+    throw e;
+  }
+}
+
+// Build the per-column SQL fragment for CREATE TABLE / ADD COLUMN.
+// Accepts { name, type, nullable, default, primary_key, unique, identity,
+// check, comment, foreign_key: { ref_table, ref_column, on_delete, on_update } }.
+function columnFragment(col) {
+  assertIdent(col.name, "column name");
+  assertType(col.type);
+  const parts = [`"${col.name}" ${col.type}`];
+  if (col.identity) {
+    const mode = col.identity === "always" ? "ALWAYS" : "BY DEFAULT";
+    parts.push(`GENERATED ${mode} AS IDENTITY`);
+  } else if (col.default !== undefined && col.default !== "" && col.default !== null) {
+    // Default may be an expression like `now()` or `gen_random_uuid()` or
+    // a literal like `'hello'`. The frontend sends the raw SQL fragment.
+    parts.push(`DEFAULT ${col.default}`);
+  }
+  if (col.nullable === false) parts.push("NOT NULL");
+  if (col.unique) parts.push("UNIQUE");
+  if (col.check && String(col.check).trim()) {
+    parts.push(`CHECK (${col.check})`);
+  }
+  if (col.foreign_key) {
+    const fk = col.foreign_key;
+    assertIdent(fk.ref_table, "fk ref_table");
+    assertIdent(fk.ref_column, "fk ref_column");
+    const onDel = (fk.on_delete || "NO ACTION").toUpperCase();
+    const onUpd = (fk.on_update || "NO ACTION").toUpperCase();
+    if (!FK_ACTION.has(onDel)) {
+      const e = new Error(`invalid on_delete: ${onDel}`); e.status = 400; throw e;
+    }
+    if (!FK_ACTION.has(onUpd)) {
+      const e = new Error(`invalid on_update: ${onUpd}`); e.status = 400; throw e;
+    }
+    parts.push(`REFERENCES "public"."${fk.ref_table}"("${fk.ref_column}") ON DELETE ${onDel} ON UPDATE ${onUpd}`);
+  }
+  return parts.join(" ");
+}
+
+// POST /vms/{slug}/db/tables  { name, columns: [Column], comment? }
+async function createTable(req, res, { slug, body }) {
+  const vm = await vmBySlug(slug);
+  if (!vm) return bad(res, 404, "vm not found", "not_found");
+  try {
+    assertIdent(body.name, "table name");
+    const cols = Array.isArray(body.columns) ? body.columns : [];
+    if (cols.length === 0) {
+      return bad(res, 400, "at least one column required", "missing_columns");
+    }
+    const fragments = cols.map(columnFragment);
+    const pks = cols.filter((c) => c.primary_key).map((c) => `"${c.name}"`);
+    if (pks.length > 0) fragments.push(`PRIMARY KEY (${pks.join(", ")})`);
+    const sql = [`CREATE TABLE "public"."${body.name}" (\n  ${fragments.join(",\n  ")}\n);`];
+    if (body.comment) {
+      const esc = String(body.comment).replace(/'/g, "''");
+      sql.push(`COMMENT ON TABLE "public"."${body.name}" IS '${esc}';`);
+    }
+    for (const c of cols) {
+      if (c.comment) {
+        const esc = String(c.comment).replace(/'/g, "''");
+        sql.push(`COMMENT ON COLUMN "public"."${body.name}"."${c.name}" IS '${esc}';`);
+      }
+    }
+    await runStatement(vm.ip, sql.join("\n"));
+    json(res, 201, { ok: true });
+  } catch (e) {
+    bad(res, e.status || 400, e.message, "sql_error");
+  }
+}
+
+// DELETE /vms/{slug}/db/tables/{name}
+async function dropTable(req, res, { slug, params }) {
+  const vm = await vmBySlug(slug);
+  if (!vm) return bad(res, 404, "vm not found", "not_found");
+  try {
+    assertIdent(params.name, "table name");
+    await runStatement(vm.ip, `DROP TABLE "public"."${params.name}";`);
+    json(res, 200, { ok: true });
+  } catch (e) {
+    bad(res, e.status || 400, e.message, "sql_error");
+  }
+}
+
+// PATCH /vms/{slug}/db/tables/{name}  { new_name?, comment? }
+async function alterTable(req, res, { slug, params, body }) {
+  const vm = await vmBySlug(slug);
+  if (!vm) return bad(res, 404, "vm not found", "not_found");
+  try {
+    assertIdent(params.name, "table name");
+    const stmts = [];
+    if (body.new_name) {
+      assertIdent(body.new_name, "new table name");
+      stmts.push(`ALTER TABLE "public"."${params.name}" RENAME TO "${body.new_name}";`);
+    }
+    if (body.comment !== undefined) {
+      const target = body.new_name || params.name;
+      const esc = String(body.comment).replace(/'/g, "''");
+      stmts.push(`COMMENT ON TABLE "public"."${target}" IS '${esc}';`);
+    }
+    if (stmts.length === 0) return bad(res, 400, "no change requested", "empty_patch");
+    await runStatement(vm.ip, stmts.join("\n"));
+    json(res, 200, { ok: true });
+  } catch (e) {
+    bad(res, e.status || 400, e.message, "sql_error");
+  }
+}
+
+// POST /vms/{slug}/db/tables/{table}/columns  Column body
+async function addColumn(req, res, { slug, params, body }) {
+  const vm = await vmBySlug(slug);
+  if (!vm) return bad(res, 404, "vm not found", "not_found");
+  try {
+    assertIdent(params.table, "table name");
+    const frag = columnFragment(body);
+    const stmts = [`ALTER TABLE "public"."${params.table}" ADD COLUMN ${frag};`];
+    if (body.primary_key) {
+      // ALTER TABLE doesn't accept inline PRIMARY KEY in ADD COLUMN with
+      // the constraint syntax we use — express it as a separate ALTER.
+      stmts.push(`ALTER TABLE "public"."${params.table}" ADD CONSTRAINT "${params.table}_${body.name}_pkey" PRIMARY KEY ("${body.name}");`);
+    }
+    if (body.comment) {
+      const esc = String(body.comment).replace(/'/g, "''");
+      stmts.push(`COMMENT ON COLUMN "public"."${params.table}"."${body.name}" IS '${esc}';`);
+    }
+    await runStatement(vm.ip, stmts.join("\n"));
+    json(res, 201, { ok: true });
+  } catch (e) {
+    bad(res, e.status || 400, e.message, "sql_error");
+  }
+}
+
+// PATCH /vms/{slug}/db/tables/{table}/columns/{column}
+// Body: { new_name?, type?, nullable?, default?, drop_default?, comment? }
+async function alterColumn(req, res, { slug, params, body }) {
+  const vm = await vmBySlug(slug);
+  if (!vm) return bad(res, 404, "vm not found", "not_found");
+  try {
+    assertIdent(params.table, "table name");
+    assertIdent(params.column, "column name");
+    const tbl = `"public"."${params.table}"`;
+    const col = `"${params.column}"`;
+    const stmts = [];
+    if (body.new_name) {
+      assertIdent(body.new_name, "new column name");
+      stmts.push(`ALTER TABLE ${tbl} RENAME COLUMN ${col} TO "${body.new_name}";`);
+    }
+    const finalName = body.new_name ? `"${body.new_name}"` : col;
+    if (body.type) {
+      assertType(body.type);
+      const usingClause = body.type_using ? ` USING (${body.type_using})` : "";
+      stmts.push(`ALTER TABLE ${tbl} ALTER COLUMN ${finalName} TYPE ${body.type}${usingClause};`);
+    }
+    if (body.nullable === true) {
+      stmts.push(`ALTER TABLE ${tbl} ALTER COLUMN ${finalName} DROP NOT NULL;`);
+    } else if (body.nullable === false) {
+      stmts.push(`ALTER TABLE ${tbl} ALTER COLUMN ${finalName} SET NOT NULL;`);
+    }
+    if (body.drop_default) {
+      stmts.push(`ALTER TABLE ${tbl} ALTER COLUMN ${finalName} DROP DEFAULT;`);
+    } else if (body.default !== undefined && body.default !== "" && body.default !== null) {
+      stmts.push(`ALTER TABLE ${tbl} ALTER COLUMN ${finalName} SET DEFAULT ${body.default};`);
+    }
+    if (body.comment !== undefined) {
+      const esc = String(body.comment).replace(/'/g, "''");
+      stmts.push(`COMMENT ON COLUMN ${tbl}.${finalName} IS '${esc}';`);
+    }
+    if (stmts.length === 0) return bad(res, 400, "no change requested", "empty_patch");
+    await runStatement(vm.ip, stmts.join("\n"));
+    json(res, 200, { ok: true });
+  } catch (e) {
+    bad(res, e.status || 400, e.message, "sql_error");
+  }
+}
+
+// DELETE /vms/{slug}/db/tables/{table}/columns/{column}
+async function dropColumn(req, res, { slug, params }) {
+  const vm = await vmBySlug(slug);
+  if (!vm) return bad(res, 404, "vm not found", "not_found");
+  try {
+    assertIdent(params.table, "table name");
+    assertIdent(params.column, "column name");
+    await runStatement(
+      vm.ip,
+      `ALTER TABLE "public"."${params.table}" DROP COLUMN "${params.column}";`,
+    );
+    json(res, 200, { ok: true });
+  } catch (e) {
+    bad(res, e.status || 400, e.message, "sql_error");
+  }
+}
+
+// Dollar-quote-safe JSON literal for embedding in SQL via $tag$…$tag$.
+function dollarQuoted(jsonStr) {
+  // Pick a tag that doesn't collide with the payload.
+  let tag = "wcn";
+  while (jsonStr.includes(`$${tag}$`)) tag += "x";
+  return { open: `$${tag}$`, close: `$${tag}$`, tag };
+}
+
+// POST /vms/{slug}/db/tables/{table}/rows  { values: {col: typed_val, ...} }
+// Only the supplied columns are inserted; identity / DEFAULT columns
+// the user omitted fire normally on the DB side.
+async function insertRow(req, res, { slug, params, body }) {
+  const vm = await vmBySlug(slug);
+  if (!vm) return bad(res, 404, "vm not found", "not_found");
+  try {
+    assertIdent(params.table, "table name");
+    const values = body.values || {};
+    if (typeof values !== "object" || values == null) {
+      return bad(res, 400, "values object required", "missing_values");
+    }
+    const keys = Object.keys(values);
+    if (keys.length === 0) {
+      // No user-provided columns — insert defaults for everything.
+      await runStatement(vm.ip, `INSERT INTO "public"."${params.table}" DEFAULT VALUES;`);
+      return json(res, 201, { ok: true });
+    }
+    keys.forEach((k) => assertIdent(k, "column"));
+    const payload = JSON.stringify(values);
+    const q = dollarQuoted(payload);
+    const colList = keys.map((k) => `"${k}"`).join(", ");
+    const sql = `INSERT INTO "public"."${params.table}" (${colList}) SELECT ${colList} FROM jsonb_populate_record(NULL::"public"."${params.table}", ${q.open}${payload}${q.close}::jsonb);`;
+    await runStatement(vm.ip, sql);
+    json(res, 201, { ok: true });
+  } catch (e) {
+    bad(res, e.status || 400, e.message, "sql_error");
+  }
+}
+
+// PATCH /vms/{slug}/db/tables/{table}/rows
+// Body: { pk: { col: val, ... }, values: { col: val, ... } }
+async function updateRow(req, res, { slug, params, body }) {
+  const vm = await vmBySlug(slug);
+  if (!vm) return bad(res, 404, "vm not found", "not_found");
+  try {
+    assertIdent(params.table, "table name");
+    const pk = body.pk || {};
+    const values = body.values || {};
+    const pkKeys = Object.keys(pk);
+    const valKeys = Object.keys(values);
+    if (pkKeys.length === 0) return bad(res, 400, "pk required", "missing_pk");
+    if (valKeys.length === 0) return bad(res, 400, "values required", "missing_values");
+    pkKeys.forEach((k) => assertIdent(k, "pk column"));
+    valKeys.forEach((k) => assertIdent(k, "value column"));
+
+    // Build the SET clause via jsonb_populate_record so types are correct.
+    const valPayload = JSON.stringify(values);
+    const pkPayload = JSON.stringify(pk);
+    const qv = dollarQuoted(valPayload);
+    const qp = dollarQuoted(pkPayload);
+    const setCols = valKeys.map((k) => `"${k}" = nv."${k}"`).join(", ");
+    const whereCols = pkKeys.map((k) => `"public"."${params.table}"."${k}" = pkv."${k}"`).join(" AND ");
+    const sql = `
+UPDATE "public"."${params.table}"
+SET ${setCols}
+FROM (SELECT * FROM jsonb_populate_record(NULL::"public"."${params.table}", ${qv.open}${valPayload}${qv.close}::jsonb)) nv,
+     (SELECT * FROM jsonb_populate_record(NULL::"public"."${params.table}", ${qp.open}${pkPayload}${qp.close}::jsonb)) pkv
+WHERE ${whereCols};`;
+    await runStatement(vm.ip, sql);
+    json(res, 200, { ok: true });
+  } catch (e) {
+    bad(res, e.status || 400, e.message, "sql_error");
+  }
+}
+
+// DELETE /vms/{slug}/db/tables/{table}/rows  Body: { pk: { col: val, ... } }
+async function deleteRow(req, res, { slug, params, body }) {
+  const vm = await vmBySlug(slug);
+  if (!vm) return bad(res, 404, "vm not found", "not_found");
+  try {
+    assertIdent(params.table, "table name");
+    const pk = body.pk || {};
+    const pkKeys = Object.keys(pk);
+    if (pkKeys.length === 0) return bad(res, 400, "pk required", "missing_pk");
+    pkKeys.forEach((k) => assertIdent(k, "pk column"));
+    const payload = JSON.stringify(pk);
+    const q = dollarQuoted(payload);
+    const whereCols = pkKeys.map((k) => `"public"."${params.table}"."${k}" = pkv."${k}"`).join(" AND ");
+    const sql = `
+DELETE FROM "public"."${params.table}"
+USING (SELECT * FROM jsonb_populate_record(NULL::"public"."${params.table}", ${q.open}${payload}${q.close}::jsonb)) pkv
+WHERE ${whereCols};`;
+    await runStatement(vm.ip, sql);
+    json(res, 200, { ok: true });
+  } catch (e) {
+    bad(res, e.status || 400, e.message, "sql_error");
+  }
+}
+
+// GET /vms/{slug}/db/tables/{table}/info — full column metadata + PK +
+// indexes + comment, for the table editor to render the column form
+// pre-filled. Locked to public.
+async function tableInfo(req, res, { slug, params }) {
+  const vm = await vmBySlug(slug);
+  if (!vm) return bad(res, 404, "vm not found", "not_found");
+  try {
+    assertIdent(params.table, "table name");
+    const sql = `SELECT json_build_object(
+      'columns', coalesce((SELECT json_agg(row_to_json(c) ORDER BY c.ordinal_position) FROM (
+        SELECT
+          c.column_name AS name,
+          c.data_type,
+          c.udt_name,
+          c.is_nullable = 'YES' AS nullable,
+          c.column_default AS default,
+          c.character_maximum_length,
+          c.numeric_precision,
+          c.numeric_scale,
+          c.ordinal_position,
+          col_description((quote_ident(c.table_schema) || '.' || quote_ident(c.table_name))::regclass, c.ordinal_position) AS comment,
+          (c.is_identity = 'YES') AS identity,
+          EXISTS (
+            SELECT 1 FROM pg_index i
+            JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+            WHERE i.indrelid = ('public.' || c.table_name)::regclass
+              AND i.indisprimary
+              AND a.attname = c.column_name
+          ) AS primary_key
+        FROM information_schema.columns c
+        WHERE c.table_schema = 'public' AND c.table_name = '${params.table}'
+      ) c), '[]'::json),
+      'comment', (SELECT obj_description(('public.' || '${params.table}')::regclass)),
+      'rls_enabled', (SELECT relrowsecurity FROM pg_class WHERE oid = ('public.' || '${params.table}')::regclass)
+    );`;
+    const data = await runJson(vm.ip, sql);
+    json(res, 200, data);
+  } catch (e) {
+    bad(res, e.status || 400, e.message, "sql_error");
+  }
+}
+
+/* Run an arbitrary shell script on a customer VM via `ssh ops@<ip> sudo bash -s`.
+ * Same pattern as runStatement but lets the caller compose its own commands.
+ * Resolves with stdout; rejects with the last few stderr lines and a synthetic
+ * `status` for HTTP propagation. */
+function sshExec(ip, script, { timeoutMs = 20000 } = {}) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(
+      "ssh",
+      [
+        "-o", "BatchMode=yes",
+        "-o", "ConnectTimeout=10",
+        "-o", "StrictHostKeyChecking=accept-new",
+        `ops@${ip}`,
+        "sudo", "bash", "-s",
+      ],
+      { stdio: ["pipe", "pipe", "pipe"] },
+    );
+    let stdout = "", stderr = "";
+    const timer = setTimeout(() => {
+      try { proc.kill("SIGTERM"); } catch {}
+      reject(Object.assign(new Error("ssh timeout"), { status: 504 }));
+    }, timeoutMs);
+    proc.stdout.on("data", (c) => (stdout += c));
+    proc.stderr.on("data", (c) => (stderr += c));
+    proc.on("close", (code) => {
+      clearTimeout(timer);
+      if (code !== 0) return reject(Object.assign(
+        new Error(stderr.trim().split(/\r?\n/).slice(-5).join("\n") || `ssh exit ${code}`),
+        { status: 400 },
+      ));
+      resolve(stdout);
+    });
+    proc.stdin.write(script);
+    proc.stdin.end();
+  });
+}
+
+const FN_NAME_RE = /^[a-z][a-z0-9_-]{0,63}$/;
+const FN_CODE_MAX = 200 * 1024;
+const FN_DIR = "/opt/supabase-stack/volumes/functions";
+
+function pickEofToken(haystack) {
+  let t = `WCN_FN_${Math.random().toString(36).slice(2, 10).toUpperCase()}`;
+  while (haystack.includes(t)) t = `WCN_FN_${Math.random().toString(36).slice(2, 10).toUpperCase()}`;
+  return t;
+}
+
+/* POST /vms/{slug}/supabase/functions  { name, code }
+ * Writes the supplied code to /opt/supabase-stack/volumes/functions/<name>/index.ts
+ * on the customer VM. The edge-runtime container picks new functions up on
+ * the next invocation — no restart needed. */
+async function functionDeploy(req, res, { slug, body }) {
+  const vm = await vmBySlug(slug);
+  if (!vm) return bad(res, 404, "vm not found", "not_found");
+  const name = String(body.name || "");
+  const code = String(body.code || "");
+  if (!FN_NAME_RE.test(name)) {
+    return bad(res, 400, "invalid function name (a-z 0-9 _ -, must start with a letter)", "invalid_name");
+  }
+  if (!code.trim()) return bad(res, 400, "code required", "missing_code");
+  if (code.length > FN_CODE_MAX) return bad(res, 413, `code exceeds ${FN_CODE_MAX} bytes`, "too_large");
+  const eof = pickEofToken(code);
+  const script = `set -e
+mkdir -p ${FN_DIR}/${name}
+cat > ${FN_DIR}/${name}/index.ts <<'${eof}'
+${code}
+${eof}
+chown -R 1000:1000 ${FN_DIR}/${name}
+chmod 644 ${FN_DIR}/${name}/index.ts
+echo deployed=${name}`;
+  try {
+    await sshExec(vm.ip, script);
+    json(res, 201, { ok: true, name });
+  } catch (e) {
+    bad(res, e.status || 502, e.message, "deploy_failed");
+  }
+}
+
+/* DELETE /vms/{slug}/supabase/functions/{name}
+ * Removes the function directory. Customer admin / main / hello are guarded. */
+async function functionDelete(req, res, { slug, params }) {
+  const vm = await vmBySlug(slug);
+  if (!vm) return bad(res, 404, "vm not found", "not_found");
+  const name = String(params.name || "");
+  if (!FN_NAME_RE.test(name)) return bad(res, 400, "invalid name", "invalid_name");
+  if (name === "main" || name === "_shared") {
+    return bad(res, 409, "the 'main' router and '_shared' helpers cannot be deleted via the API", "reserved_function");
+  }
+  const script = `set -e
+[ -d ${FN_DIR}/${name} ] || { echo not_found >&2; exit 4; }
+rm -rf ${FN_DIR}/${name}
+echo deleted=${name}`;
+  try {
+    await sshExec(vm.ip, script);
+    json(res, 200, { ok: true });
+  } catch (e) {
+    if (e.message && e.message.includes("not_found")) {
+      return bad(res, 404, "function not found", "not_found");
+    }
+    bad(res, e.status || 502, e.message, "delete_failed");
+  }
+}
+
+/* GET /vms/{slug}/supabase/functions/deployed
+ * Returns the list of function directories on disk with size + mtime. */
+async function functionsListDeployed(req, res, { slug }) {
+  const vm = await vmBySlug(slug);
+  if (!vm) return bad(res, 404, "vm not found", "not_found");
+  const script = `cd ${FN_DIR} 2>/dev/null && for d in */; do
+  name=\${d%/}
+  size=$(stat -c %s "$d/index.ts" 2>/dev/null || echo 0)
+  mtime=$(stat -c %Y "$d/index.ts" 2>/dev/null || echo 0)
+  printf '%s\\t%s\\t%s\\n' "$name" "$size" "$mtime"
+done`;
+  try {
+    const out = await sshExec(vm.ip, script);
+    const items = out.trim().split("\n").filter(Boolean).map((line) => {
+      const [name, size, mtime] = line.split("\t");
+      return {
+        name,
+        size_bytes: parseInt(size, 10) || 0,
+        mtime: mtime && Number(mtime) > 0 ? new Date(parseInt(mtime, 10) * 1000).toISOString() : null,
+      };
+    });
+    json(res, 200, items);
+  } catch (e) {
+    bad(res, e.status || 502, e.message, "list_failed");
+  }
+}
+
+/* GET /vms/{slug}/supabase/functions/{name}/source
+ * Returns the function's index.ts contents. */
+async function functionSource(req, res, { slug, params }) {
+  const vm = await vmBySlug(slug);
+  if (!vm) return bad(res, 404, "vm not found", "not_found");
+  const name = String(params.name || "");
+  if (!FN_NAME_RE.test(name)) return bad(res, 400, "invalid name", "invalid_name");
+  const script = `cat ${FN_DIR}/${name}/index.ts 2>/dev/null || { echo not_found >&2; exit 4; }`;
+  try {
+    const out = await sshExec(vm.ip, script);
+    json(res, 200, { name, code: out });
+  } catch (e) {
+    if (e.message && e.message.includes("not_found")) {
+      return bad(res, 404, "function not found", "not_found");
+    }
+    bad(res, e.status || 502, e.message, "read_failed");
+  }
+}
+
+/* POST /vms/{slug}/supabase/storage/objects/upload?bucket=&path=
+ * Streams the raw request body to Kong /storage/v1/object/{bucket}/{path}
+ * with the service-role key + x-upsert: true. Body cap = 100 MiB v1 —
+ * enforced here so a runaway upload can't blow up the provisioner. */
+const UPLOAD_MAX_BYTES = 100 * 1024 * 1024;
+
+async function storageUploadObject(req, res, { slug, query }) {
+  const vm = await vmBySlug(slug);
+  if (!vm) return bad(res, 404, "vm not found", "not_found");
+  const bucket = String(query.bucket || "");
+  const objPath = String(query.path || "");
+  if (!bucket || !objPath) return bad(res, 400, "bucket and path required", "missing");
+  if (!/^[a-z0-9][a-z0-9._-]{0,62}$/i.test(bucket)) return bad(res, 400, "invalid bucket", "invalid_bucket");
+  if (objPath.length > 1024 || objPath.includes("..") || objPath.startsWith("/")) {
+    return bad(res, 400, "invalid path", "invalid_path");
+  }
+  // Read request body up to the cap.
+  const chunks = [];
+  let total = 0;
+  try {
+    for await (const c of req) {
+      total += c.length;
+      if (total > UPLOAD_MAX_BYTES) return bad(res, 413, "upload exceeds 100 MiB cap", "too_large");
+      chunks.push(c);
+    }
+  } catch (e) {
+    return bad(res, 400, `body read failed: ${e.message}`, "body_read");
+  }
+  const body = Buffer.concat(chunks);
+  const contentType = req.headers["content-type"] || "application/octet-stream";
+  try {
+    const key = await getServiceRoleKey(slug);
+    const encodedPath = objPath.split("/").map(encodeURIComponent).join("/");
+    const url = `https://api-${slug}.${ROOT_DOMAIN}/storage/v1/object/${encodeURIComponent(bucket)}/${encodedPath}`;
+    const upstream = await fetch(url, {
+      method: "POST",
+      headers: {
+        apikey: key,
+        authorization: `Bearer ${key}`,
+        "content-type": contentType,
+        "x-upsert": "true",
+      },
+      body,
+    });
+    const text = await upstream.text();
+    let parsed = text;
+    try { parsed = text ? JSON.parse(text) : null; } catch { /* keep as text */ }
+    res.writeHead(upstream.status, { "content-type": "application/json" });
+    res.end(typeof parsed === "string" ? JSON.stringify({ message: parsed }) : JSON.stringify(parsed));
+  } catch (e) {
+    bad(res, 502, e.message, "upstream_error");
   }
 }
 
@@ -558,9 +1123,24 @@ module.exports = {
   storageCreateBucket,
   storageDeleteBucket,
   storageDeleteObject,
+  storageUploadObject,
   policies,
   policyCreate,
   policyDelete,
   realtime,
   functions,
+  createTable,
+  dropTable,
+  alterTable,
+  tableInfo,
+  addColumn,
+  alterColumn,
+  dropColumn,
+  insertRow,
+  updateRow,
+  deleteRow,
+  functionDeploy,
+  functionDelete,
+  functionsListDeployed,
+  functionSource,
 };

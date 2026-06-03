@@ -135,6 +135,9 @@ async function query(req, res, { slug, body }) {
 }
 
 // GET /vms/{slug}/db/tables
+// Returns only public-schema tables. auth / storage / realtime / supabase_*
+// schemas are managed via their dedicated UI tabs — the table editor must
+// never let customers ALTER auth.users or storage.objects directly.
 async function tables(req, res, { slug }) {
   const vm = await vmBySlug(slug);
   if (!vm) return bad(res, 404, "vm not found", "not_found");
@@ -143,8 +146,8 @@ async function tables(req, res, { slug }) {
          pg_total_relation_size(quote_ident(schemaname)||'.'||quote_ident(tablename))::bigint AS size_bytes,
          (SELECT reltuples::bigint FROM pg_class WHERE oid = (quote_ident(schemaname)||'.'||quote_ident(tablename))::regclass) AS estimated_rows
        FROM pg_tables
-       WHERE schemaname NOT IN ('pg_catalog','information_schema','pg_toast')
-       ORDER BY schemaname, tablename
+       WHERE schemaname = 'public'
+       ORDER BY tablename
      ) t;`;
   let result;
   try { result = await runPsql(vm.ip, sql, { tuplesOnly: true }); }
@@ -156,13 +159,14 @@ async function tables(req, res, { slug }) {
 }
 
 // GET /vms/{slug}/db/columns?table=foo&schema=public
+// Hard-locked to public schema — auth/storage/etc are managed through
+// their dedicated admin tabs (Kong APIs), never as raw column reads.
 async function columns(req, res, { slug, query }) {
   const vm = await vmBySlug(slug);
   if (!vm) return bad(res, 404, "vm not found", "not_found");
   const table = String(query.table || "").trim();
-  const schema = String(query.schema || "public").trim();
+  const schema = "public";
   if (!/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(table)) return bad(res, 400, "invalid table", "invalid_table");
-  if (!/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(schema)) return bad(res, 400, "invalid schema", "invalid_schema");
 
   const sql = `SELECT json_agg(row_to_json(t)) FROM (
        SELECT column_name AS name, data_type, is_nullable, column_default, ordinal_position
@@ -190,7 +194,7 @@ async function sizes(req, res, { slug }) {
            SELECT schemaname AS schema, tablename AS name,
              pg_total_relation_size(quote_ident(schemaname)||'.'||quote_ident(tablename))::bigint AS size_bytes
            FROM pg_tables
-           WHERE schemaname NOT IN ('pg_catalog','information_schema','pg_toast')
+           WHERE schemaname = 'public'
            ORDER BY size_bytes DESC LIMIT 20
          ) x
        )

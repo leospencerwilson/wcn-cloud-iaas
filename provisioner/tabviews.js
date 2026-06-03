@@ -5,7 +5,7 @@
 const db = require("./db");
 const coolify = require("./coolify");
 
-const WCN_BASE_DOMAIN = process.env.WCN_BASE_DOMAIN || "dreadnaught.western-communication.com";
+const WCN_BASE_DOMAIN = process.env.WCN_BASE_DOMAIN || "western-communication.com";
 
 function json(res, code, body) {
   res.writeHead(code, { "content-type": "application/json" });
@@ -34,7 +34,7 @@ async function supabaseConnection(req, res, { slug }) {
   const enc = pw ? encodeURIComponent(pw) : "[your-password]";
 
   json(res, 200, {
-    studio_url:      `https://admin-${slug}.${WCN_BASE_DOMAIN}`,
+    studio_url:      `https://db-${slug}.${WCN_BASE_DOMAIN}`,
     rest_url:        `https://api-${slug}.${WCN_BASE_DOMAIN}`,
     realtime_url:    `wss://api-${slug}.${WCN_BASE_DOMAIN}/realtime/v1`,
     storage_url:     `https://api-${slug}.${WCN_BASE_DOMAIN}/storage/v1`,

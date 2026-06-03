@@ -723,6 +723,106 @@ const server = http.createServer(async (req, res) => {
     } catch (e) { return json(res, e.status || 500, { error: e.message }); }
   }
 
+  // — Storage object upload (streams raw body to Kong) —
+  const sbUp = /^\/vms\/([a-z0-9][a-z0-9-]{1,38}[a-z0-9])\/supabase\/storage\/objects\/upload$/.exec(u.pathname);
+  if (sbUp && req.method === "POST") {
+    try {
+      return await supabaseAdmin.storageUploadObject(req, res, { slug: sbUp[1], query });
+    } catch (e) { return json(res, e.status || 500, { error: e.message }); }
+  }
+
+  // — Edge function deploy + list + source + delete —
+  const fnList = /^\/vms\/([a-z0-9][a-z0-9-]{1,38}[a-z0-9])\/supabase\/functions\/deployed$/.exec(u.pathname);
+  if (fnList && req.method === "GET") {
+    try {
+      return await supabaseAdmin.functionsListDeployed(req, res, { slug: fnList[1] });
+    } catch (e) { return json(res, e.status || 500, { error: e.message }); }
+  }
+  const fnDeploy = /^\/vms\/([a-z0-9][a-z0-9-]{1,38}[a-z0-9])\/supabase\/functions\/deploy$/.exec(u.pathname);
+  if (fnDeploy && req.method === "POST") {
+    try {
+      return await supabaseAdmin.functionDeploy(req, res, { slug: fnDeploy[1], body: await readBodyOr(req) });
+    } catch (e) { return json(res, e.status || 500, { error: e.message }); }
+  }
+  const fnOne = /^\/vms\/([a-z0-9][a-z0-9-]{1,38}[a-z0-9])\/supabase\/functions\/([a-z][a-z0-9_-]{0,63})$/.exec(u.pathname);
+  if (fnOne) {
+    const vSlug = fnOne[1];
+    const params = { name: fnOne[2] };
+    try {
+      if (req.method === "DELETE")              return await supabaseAdmin.functionDelete(req, res, { slug: vSlug, params });
+    } catch (e) { return json(res, e.status || 500, { error: e.message }); }
+  }
+  const fnSrc = /^\/vms\/([a-z0-9][a-z0-9-]{1,38}[a-z0-9])\/supabase\/functions\/([a-z][a-z0-9_-]{0,63})\/source$/.exec(u.pathname);
+  if (fnSrc && req.method === "GET") {
+    try {
+      return await supabaseAdmin.functionSource(req, res, { slug: fnSrc[1], params: { name: fnSrc[2] } });
+    } catch (e) { return json(res, e.status || 500, { error: e.message }); }
+  }
+
+  // — Table editor: CREATE TABLE collection POST —
+  const teC = /^\/vms\/([a-z0-9][a-z0-9-]{1,38}[a-z0-9])\/db\/tables$/.exec(u.pathname);
+  if (teC && req.method === "POST") {
+    const vSlug = teC[1];
+    try {
+      return await supabaseAdmin.createTable(req, res, { slug: vSlug, body: await readBodyOr(req) });
+    } catch (e) { return json(res, e.status || 500, { error: e.message }); }
+  }
+
+  // — Table editor: per-table info / patch / drop —
+  const teT = /^\/vms\/([a-z0-9][a-z0-9-]{1,38}[a-z0-9])\/db\/tables\/([A-Za-z_][A-Za-z0-9_]{0,62})$/.exec(u.pathname);
+  if (teT) {
+    const vSlug = teT[1];
+    const params = { name: teT[2] };
+    try {
+      if (req.method === "DELETE")              return await supabaseAdmin.dropTable(req, res, { slug: vSlug, params });
+      if (req.method === "PATCH" || req.method === "PUT") {
+        return await supabaseAdmin.alterTable(req, res, { slug: vSlug, params, body: await readBodyOr(req) });
+      }
+    } catch (e) { return json(res, e.status || 500, { error: e.message }); }
+  }
+
+  const teI = /^\/vms\/([a-z0-9][a-z0-9-]{1,38}[a-z0-9])\/db\/tables\/([A-Za-z_][A-Za-z0-9_]{0,62})\/info$/.exec(u.pathname);
+  if (teI && req.method === "GET") {
+    try {
+      return await supabaseAdmin.tableInfo(req, res, { slug: teI[1], params: { table: teI[2] } });
+    } catch (e) { return json(res, e.status || 500, { error: e.message }); }
+  }
+
+  // — Table editor: columns collection (POST add) —
+  const teCC = /^\/vms\/([a-z0-9][a-z0-9-]{1,38}[a-z0-9])\/db\/tables\/([A-Za-z_][A-Za-z0-9_]{0,62})\/columns$/.exec(u.pathname);
+  if (teCC && req.method === "POST") {
+    try {
+      return await supabaseAdmin.addColumn(req, res, { slug: teCC[1], params: { table: teCC[2] }, body: await readBodyOr(req) });
+    } catch (e) { return json(res, e.status || 500, { error: e.message }); }
+  }
+
+  // — Table editor: per-column PATCH / DELETE —
+  const teCol = /^\/vms\/([a-z0-9][a-z0-9-]{1,38}[a-z0-9])\/db\/tables\/([A-Za-z_][A-Za-z0-9_]{0,62})\/columns\/([A-Za-z_][A-Za-z0-9_]{0,62})$/.exec(u.pathname);
+  if (teCol) {
+    const vSlug = teCol[1];
+    const params = { table: teCol[2], column: teCol[3] };
+    try {
+      if (req.method === "DELETE")              return await supabaseAdmin.dropColumn(req, res, { slug: vSlug, params });
+      if (req.method === "PATCH" || req.method === "PUT") {
+        return await supabaseAdmin.alterColumn(req, res, { slug: vSlug, params, body: await readBodyOr(req) });
+      }
+    } catch (e) { return json(res, e.status || 500, { error: e.message }); }
+  }
+
+  // — Table editor: row CRUD —
+  const teR = /^\/vms\/([a-z0-9][a-z0-9-]{1,38}[a-z0-9])\/db\/tables\/([A-Za-z_][A-Za-z0-9_]{0,62})\/rows$/.exec(u.pathname);
+  if (teR) {
+    const vSlug = teR[1];
+    const params = { table: teR[2] };
+    try {
+      if (req.method === "POST")                return await supabaseAdmin.insertRow(req, res, { slug: vSlug, params, body: await readBodyOr(req) });
+      if (req.method === "PATCH" || req.method === "PUT") {
+        return await supabaseAdmin.updateRow(req, res, { slug: vSlug, params, body: await readBodyOr(req) });
+      }
+      if (req.method === "DELETE")              return await supabaseAdmin.deleteRow(req, res, { slug: vSlug, params, body: await readBodyOr(req) });
+    } catch (e) { return json(res, e.status || 500, { error: e.message }); }
+  }
+
 
   // — Tab aggregations —
   const tvM = /^\/vms\/([a-z0-9][a-z0-9-]{1,38}[a-z0-9])\/(supabase\/connection|coolify\/(?:cron|webhooks|env))$/.exec(u.pathname);
