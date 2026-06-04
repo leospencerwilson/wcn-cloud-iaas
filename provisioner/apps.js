@@ -691,10 +691,30 @@ async function envImport(req, res, { slug, params, body }) {
 async function domainsList(req, res, { slug, params }) {
   const app = await appBySlugAndId(slug, params.id);
   if (!app) return bad(res, 404, "not found", "not_found");
+  // Surface auto-config info via LEFT JOIN — the UI uses this to hide
+  // the manual CNAME instructions when we already created the record at
+  // the customer's DNS provider.
   const list = await db.rowsJson(`
     SELECT row_to_json(t) FROM (
-      SELECT hostname, status, cf_custom_hostname_id, activated_at FROM domains
-      WHERE app_id = $1 AND status != 'deleted' ORDER BY hostname
+      SELECT d.hostname, d.status, d.cf_custom_hostname_id, d.activated_at,
+             CASE
+               WHEN d.dns_integration_id IS NOT NULL THEN
+                 json_build_object(
+                   'provider', i.provider,
+                   'zone', COALESCE(
+                     (SELECT z->>'name' FROM jsonb_array_elements(i.zones_cache) z
+                       WHERE z->>'id' = d.dns_zone_id LIMIT 1),
+                     d.dns_zone_id
+                   ),
+                   'record_id', d.dns_record_id,
+                   'display_name', i.display_name
+                 )
+               ELSE NULL
+             END AS auto_configured
+        FROM domains d
+        LEFT JOIN dns_integrations i ON i.id = d.dns_integration_id
+       WHERE d.app_id = $1 AND d.status != 'deleted'
+       ORDER BY d.hostname
     ) t
   `, [app.id]);
   json(res, 200, list);

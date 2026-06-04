@@ -32,6 +32,7 @@ const capacity = require("./capacity");
 const teams = require("./teams");
 const tokens = require("./tokens");
 const migrate = require("./migrate");
+const dns = require("./dns");
 const bulk = require("./bulk");
 const webhooks = require("./webhooks");
 const dbquery = require("./dbquery");
@@ -618,6 +619,34 @@ const server = http.createServer(async (req, res) => {
   }
   if (u.pathname === "/tokens/validate" && req.method === "POST") {
     try { return await tokens.validate(req, res, { body: await readBodyOr(req) }); } catch (e) { return json(res, e.status || 500, { error: e.message }); }
+  }
+
+
+  // — DNS provider integrations (T8: Custom Domain Auto-DNS) —
+  if (u.pathname === "/dns-providers" && req.method === "GET") {
+    try { return await dns.providersMeta(req, res); } catch (e) { return json(res, e.status || 500, { error: e.message }); }
+  }
+  const dnsListM = /^\/customers\/([a-z0-9][a-z0-9-]{1,38}[a-z0-9])\/dns-integrations\/?$/.exec(u.pathname);
+  if (dnsListM) {
+    try {
+      if (req.method === "GET")  return await dns.list(req, res, { slug: dnsListM[1] });
+      if (req.method === "POST") return await dns.create(req, res, { slug: dnsListM[1], body: await readBodyOr(req) });
+    } catch (e) { return json(res, e.status || 500, { error: e.message }); }
+  }
+  const dnsOneM = /^\/customers\/([a-z0-9][a-z0-9-]{1,38}[a-z0-9])\/dns-integrations\/([0-9a-f-]{36})$/.exec(u.pathname);
+  if (dnsOneM) {
+    try {
+      if (req.method === "GET")    return await dns.get(req, res,    { slug: dnsOneM[1], id: dnsOneM[2] });
+      if (req.method === "DELETE") return await dns.remove(req, res, { slug: dnsOneM[1], id: dnsOneM[2] });
+    } catch (e) { return json(res, e.status || 500, { error: e.message }); }
+  }
+  const dnsTestM = /^\/customers\/([a-z0-9][a-z0-9-]{1,38}[a-z0-9])\/dns-integrations\/([0-9a-f-]{36})\/test$/.exec(u.pathname);
+  if (dnsTestM && req.method === "POST") {
+    try { return await dns.test(req, res, { slug: dnsTestM[1], id: dnsTestM[2] }); } catch (e) { return json(res, e.status || 500, { error: e.message }); }
+  }
+  const dnsZonesM = /^\/customers\/([a-z0-9][a-z0-9-]{1,38}[a-z0-9])\/dns-integrations\/([0-9a-f-]{36})\/zones$/.exec(u.pathname);
+  if (dnsZonesM && req.method === "POST") {
+    try { return await dns.refreshZones(req, res, { slug: dnsZonesM[1], id: dnsZonesM[2] }); } catch (e) { return json(res, e.status || 500, { error: e.message }); }
   }
 
   // — T3 #30: bulk ops —

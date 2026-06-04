@@ -17,6 +17,8 @@
 
 const https = require("https");
 const db = require("./db");
+const dnsIntegrations = require("./dns-integrations");
+const { buildClient } = require("../lib/dns/providers");
 const coolify = require("./coolify");
 
 const CF_API_TOKEN = process.env.CF_API_TOKEN;
@@ -147,12 +149,47 @@ async function add(req, res, { slug, params, body }) {
     [hostname, slug, hid, app.id],
   );
   await audit(req, "domain.add", slug, `app=${app.id} hostname=${hostname} hid=${hid}`);
+  // ── Auto-config CNAME at customer's connected DNS provider, if any. ──
+  // Strictly additive: failure here doesn't fail the domain add — customer
+  // still gets the manual instructions and can finish by hand. We capture
+  // the upstream record IDs so the matching del() can clean up.
+  let autoConfigured = null;
+  try {
+    const match = await dnsIntegrations.findForHostname(slug, hostname);
+    if (match) {
+      const client = buildClient(match.integration.provider, match.integration.credentials);
+      const rec = await client.upsertRecord(match.zone.id, {
+        name: hostname,
+        type: "CNAME",
+        content: `${slug}.western-communication.com`,
+        ttl: 300,
+        comment: `WCN Cloud: ${hostname}`,
+      });
+      await db.exec(
+        `UPDATE domains
+            SET dns_integration_id = $2, dns_record_id = $3, dns_zone_id = $4
+          WHERE hostname = $1`,
+        [hostname, match.integration.id, rec.id, match.zone.id],
+      );
+      autoConfigured = {
+        provider: match.integration.provider,
+        zone: match.zone.name,
+        record_id: rec.id,
+      };
+      await audit(req, "domain.dns_autoconfig", slug, `hostname=${hostname} provider=${match.integration.provider} zone=${match.zone.name} record=${rec.id}`);
+    }
+  } catch (e) {
+    console.error("[domains] DNS auto-config failed (non-fatal):", e.message);
+    await audit(req, "domain.dns_autoconfig_failed", slug, `hostname=${hostname} error=${e.message.slice(0, 200)}`);
+  }
+
 
   json(res, 202, {
     hostname,
     status: "pending",
     cf_custom_hostname_id: hid,
     cname_target: `${slug}.western-communication.com`,
+    auto_configured: autoConfigured,
     instructions: `Add a CNAME record for ${hostname} pointing to ${slug}.western-communication.com. Once propagated, an SSL certificate will be issued automatically.`,
   });
 }
@@ -307,6 +344,20 @@ async function del(req, res, { slug, params }) {
     await cfApi("DELETE", `/zones/${CF_ZONE_ID}/custom_hostnames/${row.cf_custom_hostname_id}`);
   } catch (e) {
     console.error("[domains] CF delete failed (continuing):", e.message);
+  }
+
+  if (row.dns_integration_id && row.dns_record_id && row.dns_zone_id) {
+    try {
+      const integ = await dnsIntegrations.getById(slug, row.dns_integration_id);
+      if (integ) {
+        const client = buildClient(integ.provider, integ.credentials);
+        await client.deleteRecord(row.dns_zone_id, row.dns_record_id);
+        await audit(req, "domain.dns_autocleanup", slug, `hostname=${hostname} provider=${integ.provider} record=${row.dns_record_id}`);
+      }
+    } catch (e) {
+      console.error("[domains] DNS cleanup failed (continuing):", e.message);
+      await audit(req, "domain.dns_autocleanup_failed", slug, `hostname=${hostname} error=${e.message.slice(0, 200)}`);
+    }
   }
 
   await db.exec(
