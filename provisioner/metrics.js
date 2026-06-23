@@ -85,11 +85,14 @@ function singleSeries(result) {
 
 // ── /vms/{slug}/metrics ──────────────────────────────────────────────
 async function vmMetrics(req, res, { slug, query }) {
-  const vm = await db.oneJson(
-    `SELECT row_to_json(t) FROM (SELECT customer_slug FROM vms WHERE customer_slug = $1) t`,
-    [slug],
-  );
-  if (!vm) return bad(res, 404, "vm not found", "not_found");
+  // VoIP platform hosts are Prometheus targets (slug=voip-*, kind=node), not customer VMs.
+  if (!/^voip-(sbc|edge|core)$/.test(slug)) {
+    const vm = await db.oneJson(
+      `SELECT row_to_json(t) FROM (SELECT customer_slug FROM vms WHERE customer_slug = $1) t`,
+      [slug],
+    );
+    if (!vm) return bad(res, 404, "vm not found", "not_found");
+  }
 
   const winKey = query.window || "1h";
   const win = WINDOWS[winKey];
