@@ -38,6 +38,8 @@ const webhooks = require("./webhooks");
 const dbquery = require("./dbquery");
 const supabaseAdmin = require("./supabase-admin");
 const tabviews = require("./tabviews");
+const db = require("./db");
+const limits = require("./limits");
 process.on("unhandledRejection", (err) => {
   console.error("[unhandledRejection]", err && err.stack ? err.stack : err);
 });
@@ -50,6 +52,9 @@ const PORT = parseInt(process.env.PORT || "9000", 10);
 const TOKEN = process.env.PROVISIONER_TOKEN;
 const SCRIPTS_DIR = process.env.SCRIPTS_DIR || "/opt/wcn-cloud/scripts";
 const LOG_DIR = process.env.LOG_DIR || "/var/log/wcn-cloud/jobs";
+// Watchdog ceiling for a single job (in-script step timeouts are the first line
+// of defence; this is the backstop against a wholly-hung job).
+const JOB_TIMEOUT_MS = parseInt(process.env.JOB_TIMEOUT_MS || "2700000", 10); // 45 min
 
 if (!TOKEN) {
   console.error("PROVISIONER_TOKEN is not set — refusing to start.");
@@ -89,7 +94,7 @@ function readBody(req) {
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/;
 
-function enqueue(kind, slug, extraArgs = []) {
+function enqueue(kind, slug, extraArgs = [], mode = null) {
   const jobId = randomUUID();
   const logPath = path.join(LOG_DIR, `${jobId}.log`);
   const job = {
@@ -97,17 +102,92 @@ function enqueue(kind, slug, extraArgs = []) {
     kind,
     slug,
     args: extraArgs,
+    mode:
+      mode ||
+      (extraArgs.includes("--reset")
+        ? "fresh"
+        : extraArgs.includes("--resume")
+          ? "resume"
+          : "new"),
     status: "queued",
     exitCode: null,
     startedAt: null,
     finishedAt: null,
     logPath,
     proc: null,
+    steps: [],
+    cancelled: false,
+    timedOut: false,
+    watchdog: null,
   };
   jobs.set(jobId, job);
+  persistJob(job).catch((e) => console.error("[db] persistJob:", e.message));
   queue.push(job);
   drain();
   return job;
+}
+
+// ── durable job/step state (mirror of the in-memory model into ops_db) ──
+async function persistJob(job) {
+  await db.exec(
+    `INSERT INTO provision_jobs (id, kind, slug, mode, status, args)
+       VALUES ($1,$2,$3,$4,$5,$6)
+     ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status`,
+    [job.jobId, job.kind, job.slug, job.mode, job.status, JSON.stringify(job.args || [])],
+  );
+}
+
+async function updateJobStatus(job) {
+  await db.exec(
+    `UPDATE provision_jobs
+        SET status = $2, exit_code = $3, started_at = $4, finished_at = $5
+      WHERE id = $1`,
+    [job.jobId, job.status, job.exitCode, job.startedAt, job.finishedAt],
+  );
+}
+
+function recordStep(job, key, state) {
+  const nowIso = new Date().toISOString();
+  let s = job.steps.find((x) => x.key === key);
+  if (!s) {
+    s = { key, state, startedAt: nowIso, finishedAt: null };
+    job.steps.push(s);
+  }
+  s.state = state;
+  if (state === "done" || state === "failed") s.finishedAt = nowIso;
+  db.exec(
+    `INSERT INTO provision_steps (job_id, key, state, started_at, finished_at)
+       VALUES ($1,$2,$3,$4,$5)
+     ON CONFLICT (job_id, key) DO UPDATE SET state = EXCLUDED.state, finished_at = EXCLUDED.finished_at`,
+    [job.jobId, key, state, s.startedAt, s.finishedAt],
+  ).catch(() => {});
+}
+
+// On boot, any DB job still 'queued'/'running' was orphaned by a crash/restart
+// (the in-memory job + process are gone). Mark it failed and unstick the
+// customer so it never sits at 'provisioning' forever (the VM 206 class).
+async function reconcileOrphanedJobs() {
+  try {
+    const rows = await db.rows(
+      "SELECT id, slug, kind FROM provision_jobs WHERE status IN ('queued','running')",
+    );
+    for (const [id, slug, kind] of rows) {
+      await db.exec(
+        "UPDATE provision_jobs SET status='failed', finished_at=now(), error='orphaned by provisioner restart' WHERE id=$1",
+        [id],
+      );
+      if (kind === "provision") {
+        await db.exec(
+          "UPDATE customers SET status='failed' WHERE slug=$1 AND status='provisioning'",
+          [slug],
+        );
+      }
+      console.log(`[reconcile] orphaned job ${id} (${slug}) → failed`);
+    }
+    if (rows.length) console.log(`[reconcile] cleaned ${rows.length} orphaned job(s)`);
+  } catch (e) {
+    console.error("[reconcile] error:", e.message);
+  }
 }
 
 function drain() {
@@ -128,6 +208,7 @@ function drain() {
 
   job.status = "running";
   job.startedAt = new Date().toISOString();
+  updateJobStatus(job).catch(() => {});
 
   const args = ["--slug", job.slug, ...job.args];
   const proc = spawn(scriptPath, args, {
@@ -136,19 +217,48 @@ function drain() {
   });
   job.proc = proc;
 
-  proc.stdout.on("data", (c) => logStream.write(c));
+  // Tee stdout to the log AND parse WCN_STEP markers into the structured step
+  // model (line-buffered — markers can span chunk boundaries).
+  let stdoutBuf = "";
+  proc.stdout.on("data", (c) => {
+    logStream.write(c);
+    stdoutBuf += c.toString("utf8");
+    let nl;
+    while ((nl = stdoutBuf.indexOf("\n")) >= 0) {
+      const line = stdoutBuf.slice(0, nl);
+      stdoutBuf = stdoutBuf.slice(nl + 1);
+      const mm = /^WCN_STEP (\S+) (running|done|failed)\b/.exec(line);
+      if (mm) recordStep(job, mm[1], mm[2]);
+    }
+  });
   proc.stderr.on("data", (c) => logStream.write(c));
+
+  // Backstop watchdog for a wholly-hung job.
+  job.watchdog = setTimeout(() => {
+    job.timedOut = true;
+    logStream.write(`\n[watchdog] job exceeded ${Math.round(JOB_TIMEOUT_MS / 1000)}s — sending SIGTERM\n`);
+    try { proc.kill("SIGTERM"); } catch {}
+    setTimeout(() => { try { proc.kill("SIGKILL"); } catch {} }, 10000);
+  }, JOB_TIMEOUT_MS);
 
   proc.on("error", (err) => {
     logStream.write(`\n[receiver] spawn error: ${err.message}\n`);
   });
 
   proc.on("close", (code) => {
-    job.status = code === 0 ? "succeeded" : "failed";
+    if (job.watchdog) { clearTimeout(job.watchdog); job.watchdog = null; }
+    job.status = job.cancelled
+      ? "cancelled"
+      : job.timedOut
+        ? "failed"
+        : code === 0
+          ? "succeeded"
+          : "failed";
     job.exitCode = code;
     job.finishedAt = new Date().toISOString();
     job.proc = null;
-    logStream.end(`\n── exit ${code} at ${job.finishedAt}\n`);
+    logStream.end(`\n── exit ${code} (${job.status}) at ${job.finishedAt}\n`);
+    updateJobStatus(job).catch(() => {});
     current = null;
     setImmediate(drain);
   });
@@ -254,6 +364,27 @@ function streamLog(req, res, job) {
 }
 
 
+// Per-component tri-state health for a customer (DNS, tunnel, VM networking,
+// docker, coolify, caddy, cloudflared, supabase, metrics). Reuses the same
+// check logic as the provision gate via `customer-health-check.sh --json`,
+// which runs every check independently and prints a JSON array on stdout.
+function customerHealth(req, res, { slug }) {
+  const sh = path.join(SCRIPTS_DIR, "customer-health-check.sh");
+  const child = spawn(sh, [slug, "--json", "--with-metrics"], { env: process.env });
+  let out = "";
+  child.stdout.on("data", (c) => (out += c));
+  child.on("close", () => {
+    let components = null;
+    const lastLine = out.trim().split("\n").filter(Boolean).pop() || "";
+    try { components = JSON.parse(lastLine); } catch {}
+    if (!Array.isArray(components)) {
+      return json(res, 200, { components: [], error: "no health json" });
+    }
+    json(res, 200, { components, checked_at: new Date().toISOString() });
+  });
+  child.on("error", (e) => json(res, 502, { error: e.message }));
+}
+
 function slugFromReq(req, parsedUrl) {
   const fromQuery = parsedUrl.searchParams.get("slug");
   const fromHdr   = req.headers["x-wcn-customer-slug"];
@@ -303,6 +434,18 @@ const server = http.createServer(async (req, res) => {
       if (str(body.email)) extra.push("--email", str(body.email));
       if (str(body.domain)) extra.push("--domain", str(body.domain));
       if (str(body.brandColour)) extra.push("--brand-colour", str(body.brandColour));
+      // Optional VM resources (ask 1). Validate as ints against shared bounds
+      // before they reach the shell; the script re-validates + tier-defaults.
+      try {
+        if (body.cores != null && body.cores !== "")
+          extra.push("--cores", String(limits.validateInt("cores", body.cores)));
+        if (body.memoryMb != null && body.memoryMb !== "")
+          extra.push("--memory-mb", String(limits.validateInt("memory_mb", body.memoryMb)));
+        if (body.diskGb != null && body.diskGb !== "")
+          extra.push("--disk-gb", String(limits.validateInt("disk_gb", body.diskGb)));
+      } catch (e) {
+        return json(res, e.status || 400, { error: e.message, code: e.code });
+      }
       if (body.resume) extra.push("--resume");
       const job = enqueue("provision", body.slug, extra);
       return json(res, 202, { jobId: job.jobId, status: job.status });
@@ -326,21 +469,74 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // GET /jobs/:id  or  GET /jobs/:id/stream
-  const m = /^\/jobs\/([0-9a-f-]{36})(\/stream)?$/.exec(req.url || "");
-  if (m && req.method === "GET") {
-    const job = jobs.get(m[1]);
+  // GET /jobs/:id[/stream|/log]  ·  POST /jobs/:id/(cancel|retry)
+  const m = /^\/jobs\/([0-9a-f-]{36})(?:\/(stream|log|cancel|retry))?$/.exec(
+    req.url ? req.url.split("?")[0] : "",
+  );
+  if (m) {
+    const jobId = m[1];
+    const action = m[2] || "";
+
+    // /log reads the persisted file, so it works even for jobs lost from
+    // memory after a restart (UUID-validated path → no traversal).
+    if (action === "log" && req.method === "GET") {
+      try {
+        const txt = fs.readFileSync(path.join(LOG_DIR, `${jobId}.log`), "utf8");
+        res.writeHead(200, { "content-type": "text/plain", "cache-control": "no-store" });
+        return res.end(txt);
+      } catch {
+        return json(res, 404, { error: "no log" });
+      }
+    }
+
+    const job = jobs.get(jobId);
     if (!job) return json(res, 404, { error: "not found" });
-    if (m[2]) return streamLog(req, res, job);
-    return json(res, 200, {
-      jobId: job.jobId,
-      kind: job.kind,
-      slug: job.slug,
-      status: job.status,
-      exitCode: job.exitCode,
-      startedAt: job.startedAt,
-      finishedAt: job.finishedAt,
-    });
+
+    if (action === "stream" && req.method === "GET") return streamLog(req, res, job);
+
+    if (action === "cancel" && req.method === "POST") {
+      if (job.status === "running" || job.status === "queued") {
+        job.cancelled = true;
+        if (job.proc) {
+          try { job.proc.kill("SIGTERM"); } catch {}
+        } else {
+          // Queued but not yet started: drop it from the queue.
+          const i = queue.indexOf(job);
+          if (i >= 0) queue.splice(i, 1);
+          job.status = "cancelled";
+          job.finishedAt = new Date().toISOString();
+          updateJobStatus(job).catch(() => {});
+        }
+        return json(res, 202, { jobId, status: "cancelling" });
+      }
+      return json(res, 409, { error: `job is ${job.status}` });
+    }
+
+    if (action === "retry" && req.method === "POST") {
+      if (job.kind !== "provision") return json(res, 400, { error: "only provision jobs can be retried" });
+      const mode =
+        new URL(req.url || "/", "http://localhost").searchParams.get("mode") === "fresh"
+          ? "fresh"
+          : "resume";
+      const base = (job.args || []).filter((a) => a !== "--resume" && a !== "--reset");
+      const newArgs = mode === "fresh" ? [...base, "--reset"] : [...base, "--resume"];
+      const nj = enqueue("provision", job.slug, newArgs, mode);
+      return json(res, 202, { jobId: nj.jobId, status: nj.status, mode });
+    }
+
+    if (action === "" && req.method === "GET") {
+      return json(res, 200, {
+        jobId: job.jobId,
+        kind: job.kind,
+        slug: job.slug,
+        mode: job.mode,
+        status: job.status,
+        exitCode: job.exitCode,
+        startedAt: job.startedAt,
+        finishedAt: job.finishedAt,
+        steps: job.steps,
+      });
+    }
   }
 
 
@@ -405,12 +601,18 @@ const server = http.createServer(async (req, res) => {
   }
 
 
+  // — /voip/summary —
+  if (u.pathname === "/voip/summary" && req.method === "GET") {
+    return await metrics.voipSummary(req, res);
+  }
+
   // — /vms/{slug}/* —
-  const vmm1 = /^\/vms\/([a-z0-9][a-z0-9-]{1,38}[a-z0-9])\/(power|restart|stop|start|backups|resize|snapshots|metrics|backup-policy)\/?$/.exec(u.pathname);
+  const vmm1 = /^\/vms\/([a-z0-9][a-z0-9-]{1,38}[a-z0-9])\/(power|restart|stop|start|backups|resize|snapshots|metrics|backup-policy|health)\/?$/.exec(u.pathname);
   if (vmm1) {
     const vSlug = vmm1[1];
     const action = vmm1[2];
     try {
+      if (action === "health"  && req.method === "GET")  return customerHealth(req, res,    { slug: vSlug });
       if (action === "power"   && req.method === "GET")  return await vms.power(req, res,   { slug: vSlug });
       if (action === "restart" && req.method === "POST") return await vms.restart(req, res, { slug: vSlug });
       if (action === "stop"    && req.method === "POST") return await vms.stop(req, res,    { slug: vSlug });
@@ -910,4 +1112,5 @@ server.listen(PORT, "0.0.0.0", () => {
   console.log(`wcn-provisioner listening on :${PORT}`);
   console.log(`  scripts: ${SCRIPTS_DIR}`);
   console.log(`  logs:    ${LOG_DIR}`);
+  reconcileOrphanedJobs();
 });

@@ -181,4 +181,35 @@ async function appMetrics(req, res, { slug, params, query }) {
   });
 }
 
-module.exports = { vmMetrics, appMetrics };
+// ── /voip/summary ──
+function promInstant(metric) {
+  const u = new URL(`${PROM_URL}/api/v1/query`);
+  u.searchParams.set("query", metric);
+  return new Promise((resolve) => {
+    http
+      .get(u.toString(), (r) => {
+        let buf = "";
+        r.on("data", (c) => (buf += c));
+        r.on("end", () => {
+          try {
+            const v = JSON.parse(buf)?.data?.result?.[0]?.value?.[1];
+            resolve(v == null ? null : Number(v));
+          } catch {
+            resolve(null);
+          }
+        });
+      })
+      .on("error", () => resolve(null));
+  });
+}
+
+async function voipSummary(req, res) {
+  const [active_calls, registrations, companies] = await Promise.all([
+    promInstant("wcn_voip_active_calls"),
+    promInstant("wcn_voip_registrations"),
+    promInstant("wcn_voip_companies"),
+  ]);
+  json(res, 200, { active_calls, registrations, companies });
+}
+
+module.exports = { vmMetrics, appMetrics, voipSummary };
