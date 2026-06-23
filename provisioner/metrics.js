@@ -203,13 +203,39 @@ function promInstant(metric) {
   });
 }
 
+function liveStats() {
+  return new Promise((resolve) => {
+    const r = http.get(
+      {
+        host: "10.10.30.21",
+        port: 9101,
+        path: "/stats",
+        headers: { Authorization: "Bearer " + (process.env.LIVESTATS_TOKEN || "") },
+        timeout: 4000,
+      },
+      (resp) => {
+        let buf = "";
+        resp.on("data", (c) => (buf += c));
+        resp.on("end", () => {
+          try { resolve(JSON.parse(buf)); } catch { resolve({}); }
+        });
+      },
+    );
+    r.on("error", () => resolve({}));
+    r.on("timeout", () => { r.destroy(); resolve({}); });
+  });
+}
+
 async function voipSummary(req, res) {
-  const [active_calls, registrations, companies] = await Promise.all([
-    promInstant("wcn_voip_active_calls"),
-    promInstant("wcn_voip_registrations"),
+  const [companies, live] = await Promise.all([
     promInstant("wcn_voip_companies"),
+    liveStats(),
   ]);
-  json(res, 200, { active_calls, registrations, companies });
+  json(res, 200, {
+    active_calls: live && typeof live.active_calls === "number" ? live.active_calls : null,
+    registrations: live && typeof live.registrations === "number" ? live.registrations : null,
+    companies,
+  });
 }
 
 module.exports = { vmMetrics, appMetrics, voipSummary };
